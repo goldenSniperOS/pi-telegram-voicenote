@@ -12,11 +12,22 @@
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { configPath as defaultConfigPath, loadConfig, parseSttEngine, saveConfig, sttVenvDir, type VoicenoteConfig } from "./config.ts";
+import {
+  configPath as defaultConfigPath,
+  loadConfig,
+  parseSttEngine,
+  saveConfig,
+  secretsPath as defaultSecretsPath,
+  sttVenvDir,
+  type VoicenoteConfig,
+} from "./config.ts";
 import { buildMarker, hasVoiceMarkup, parseMarkerId, stripMarkers } from "./marker.ts";
+import { sampleText } from "./options.ts";
 import { makeScript, type ScriptWriter } from "./script.ts";
-import { createTranscriber, describeStt, modelSize, setupLocalStt, type SttDeps, type TranscriptionFile } from "./stt.ts";
+import { deleteSavedApiKey, describeApiKey, readSavedApiKey, saveApiKey } from "./secrets.ts";
+import { createTranscriber, describeStt, hasLocalEngine, modelSize, setupLocalStt, type SttDeps, type TranscriptionFile } from "./stt.ts";
 import { synthesize as defaultSynthesize, type TtsSettings } from "./tts.ts";
+import { runWizard, type VoicenoteController } from "./wizard.ts";
 
 export const PROVIDER_ID = "pi-telegram-voicenote";
 export const REGISTRY_KEY = "__piTelegramVoiceSynthesisProviders__";
@@ -42,12 +53,14 @@ interface TelegramCommandsModule {
 
 export interface ExtensionDeps {
   configPath?: string;
+  /** Where the wizard saves the OpenAI API key (mode 0600). */
+  secretsPath?: string;
   synthesize?: (text: string, settings: TtsSettings) => Promise<string>;
   importTelegramCommands?: () => Promise<TelegramCommandsModule>;
   stt?: SttDeps;
 }
 
-const USAGE = "Usage: /voicenote [on|off|status] · /voicenote stt auto|openai|faster-whisper|off · /voicenote setup-stt";
+const USAGE = "Usage: /voicenote [menu|on|off|status] · /voicenote stt auto|openai|faster-whisper|off · /voicenote setup-stt";
 
 const TELEGRAM_COMMANDS_MODULE = "@llblab/pi-telegram/commands";
 
@@ -77,7 +90,8 @@ export function createExtension(deps: ExtensionDeps = {}) {
   const synthesize = deps.synthesize ?? defaultSynthesize;
   const importTelegramCommands =
     deps.importTelegramCommands ?? (() => import(TELEGRAM_COMMANDS_MODULE) as Promise<TelegramCommandsModule>);
-  const sttDeps: SttDeps = { venvDir: sttVenvDir(), ...deps.stt };
+  const keyPath = deps.secretsPath ?? defaultSecretsPath();
+  const sttDeps: SttDeps = { venvDir: sttVenvDir(), secretsPath: keyPath, ...deps.stt };
 
   return function voicenote(pi: ExtensionAPI): void {
     let config: VoicenoteConfig = loadConfig(path).config;
@@ -95,13 +109,17 @@ export function createExtension(deps: ExtensionDeps = {}) {
 
     let setupRunning = false;
 
+    const setupExplanation = (): string => {
+      config = loadConfig(path).config;
+      const model = config.sttLocalModel;
+      return `This installs local speech-to-text: a Python environment in ${sttDeps.venvDir}, the faster-whisper package, and the "${model}" model (${modelSize(model)}). Nothing leaves this machine when transcribing.`;
+    };
+
     const setupStt = async (confirmed: boolean, say: (text: string) => unknown): Promise<string> => {
+      if (!confirmed) return `${setupExplanation()} Send /voicenote setup-stt confirm to proceed.`;
       config = loadConfig(path).config;
       const venvDir = sttDeps.venvDir!;
       const model = config.sttLocalModel;
-      if (!confirmed) {
-        return `This installs local speech-to-text: a Python environment in ${venvDir}, the faster-whisper package, and the "${model}" model (${modelSize(model)}). Nothing leaves this machine when transcribing. Send /voicenote setup-stt confirm to proceed.`;
-      }
       if (setupRunning) return "Local speech-to-text setup is already running.";
       setupRunning = true;
       try {
@@ -127,15 +145,42 @@ export function createExtension(deps: ExtensionDeps = {}) {
       if (sub === "on" || sub === "off") {
         config = { ...config, enabled: sub === "on" };
         saveConfig({ enabled: config.enabled }, path);
-      } else if (sub && sub !== "status") {
+      } else if (sub && sub !== "status" && sub !== "menu") {
         return USAGE;
       }
       return status();
     };
 
+    const keyState = () => describeApiKey(sttDeps.env ?? process.env, keyPath);
+
     const status = (): string => {
       const writer = config.scriptMode === "plain" ? "plain cleanup" : `model ${config.model ?? "(current)"}`;
-      return `Voice notes: ${config.enabled ? "on" : "off"} · voice ${config.voice} · script by ${writer} · voice input: ${describeStt(config, sttDeps)}`;
+      return `Voice notes: ${config.enabled ? "on" : "off"} · voice ${config.voice} · rate ${config.rate} · script by ${writer} · voice input: ${describeStt(config, sttDeps)} · OpenAI key: ${keyState()}`;
+    };
+
+    const controller: VoicenoteController = {
+      config: () => (config = loadConfig(path).config),
+      update: (patch) => {
+        config = { ...loadConfig(path).config, ...patch };
+        saveConfig(patch, path);
+      },
+      status: () => {
+        config = loadConfig(path).config;
+        return status();
+      },
+      sttSummary: () => describeStt(config, sttDeps),
+      keyState,
+      hasSavedKey: () => readSavedApiKey(keyPath) !== undefined,
+      saveKey: (key) => saveApiKey(key, keyPath),
+      deleteKey: () => deleteSavedApiKey(keyPath),
+      secretsPath: keyPath,
+      localInstalled: () => hasLocalEngine(config, sttDeps),
+      setupExplanation,
+      setupStt: (say) => setupStt(true, say),
+      testVoice: () => {
+        config = loadConfig(path).config;
+        return synthesize(sampleText(config.voice, config.rate), config);
+      },
     };
 
     const scriptWriter = (): ScriptWriter | undefined => {
@@ -239,6 +284,11 @@ export function createExtension(deps: ExtensionDeps = {}) {
     pi.registerCommand("voicenote", {
       description: "Telegram voice notes: on, off, status, stt <engine>, setup-stt",
       handler: async (args, commandCtx) => {
+        const sub = args.trim().toLowerCase();
+        if ((sub === "" || sub === "menu") && commandCtx.hasUI) {
+          await runWizard(commandCtx.ui, controller);
+          return;
+        }
         const say = (text: string) => commandCtx.ui.notify(text, "info");
         say(await handleCommand(args, say));
       },

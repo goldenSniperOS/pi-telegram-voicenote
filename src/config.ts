@@ -75,6 +75,43 @@ export function configPath(env: NodeJS.ProcessEnv = process.env, home = homedir(
   return join(agentDir(env, home), "telegram-voicenote.json");
 }
 
+/** The OpenAI API key saved from the Pi wizard (mode 0600), kept apart from the config. */
+export function secretsPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+  return join(agentDir(env, home), "telegram-voicenote.secrets.json");
+}
+
+// Voice and rate end up inside SSML attributes; model names are sent to APIs and
+// process arguments: allow only safe characters.
+export const VOICE_PATTERN = /^[A-Za-z0-9-]+$/;
+export const RATE_PATTERN = /^[+-]\d{1,3}%$/;
+export const OPENAI_MODEL_PATTERN = /^[A-Za-z0-9._:-]+$/;
+export const LOCAL_MODEL_PATTERN = /^[A-Za-z0-9._\/-]+$/;
+/** "auto" or an ISO 639 code such as "es" (optionally with a region, "pt-BR"). */
+export const LANGUAGE_PATTERN = /^(auto|[a-z]{2,3}(-[A-Za-z]{2,4})?)$/;
+
+export function parseVoice(value: string): string | undefined {
+  const v = value.trim();
+  return VOICE_PATTERN.test(v) ? v : undefined;
+}
+
+/** "+10%", "-5%", and "10%" (read as "+10%"). */
+export function parseRate(value: string): string | undefined {
+  const v = value.trim();
+  const signed = /^\d/.test(v) ? `+${v}` : v;
+  return RATE_PATTERN.test(signed) ? signed : undefined;
+}
+
+export function parseOpenaiModel(value: string): string | undefined {
+  const v = value.trim();
+  return OPENAI_MODEL_PATTERN.test(v) ? v : undefined;
+}
+
+export function parseSttLanguage(value: string): string | undefined {
+  const v = value.trim();
+  const normalized = v.includes("-") ? v : v.toLowerCase();
+  return LANGUAGE_PATTERN.test(normalized) ? normalized : undefined;
+}
+
 /** The Python venv that `/voicenote setup-stt` creates for faster-whisper. */
 export function sttVenvDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   return join(agentDir(env, home), "telegram-voicenote", "stt-venv");
@@ -99,15 +136,14 @@ export function normalizeConfig(raw: Record<string, unknown>): VoicenoteConfig {
     scriptTimeoutMs: clampInt(raw.scriptTimeoutMs, d.scriptTimeoutMs, 5000, 600_000),
     language: str(raw.language, d.language),
     style: typeof raw.style === "string" ? raw.style.trim() : d.style,
-    // Both end up inside SSML attributes: allow only safe characters.
-    voice: matching(raw.voice, /^[A-Za-z0-9-]+$/, d.voice),
-    rate: matching(raw.rate, /^[+-]\d{1,3}%$/, d.rate),
+    voice: matching(raw.voice, VOICE_PATTERN, d.voice),
+    rate: matching(raw.rate, RATE_PATTERN, d.rate),
     minResponseChars: clampInt(raw.minResponseChars, d.minResponseChars, 1, 1_000_000),
     ffmpegPath: str(raw.ffmpegPath, d.ffmpegPath),
     sttEngine: parseSttEngine(raw.sttEngine) ?? d.sttEngine,
-    sttOpenaiModel: matching(raw.sttOpenaiModel, /^[A-Za-z0-9._:-]+$/, d.sttOpenaiModel),
+    sttOpenaiModel: matching(raw.sttOpenaiModel, OPENAI_MODEL_PATTERN, d.sttOpenaiModel),
     // Passed as a process argument and a Hugging Face id: keep it to safe characters.
-    sttLocalModel: matching(raw.sttLocalModel, /^[A-Za-z0-9._\/-]+$/, d.sttLocalModel),
+    sttLocalModel: matching(raw.sttLocalModel, LOCAL_MODEL_PATTERN, d.sttLocalModel),
     sttLanguage: str(raw.sttLanguage, d.sttLanguage),
     sttTimeoutMs: clampInt(raw.sttTimeoutMs, d.sttTimeoutMs, 10_000, 1_800_000),
     sttPython: typeof raw.sttPython === "string" && raw.sttPython.trim() ? raw.sttPython.trim() : undefined,

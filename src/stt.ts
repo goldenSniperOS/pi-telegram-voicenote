@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { SttEngine, VoicenoteConfig } from "./config.ts";
+import { resolveApiKey } from "./secrets.ts";
 
 export type SttSettings = Pick<
   VoicenoteConfig,
@@ -38,6 +39,8 @@ export interface SttDeps {
   exists?: (path: string) => boolean;
   /** Where `/voicenote setup-stt` puts the venv. */
   venvDir?: string;
+  /** The key saved from the Pi wizard; OPENAI_API_KEY in `env` wins over it. */
+  secretsPath?: string;
 }
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -133,10 +136,15 @@ export async function transcribeLocal(
 function resolve(settings: SttSettings, deps: SttDeps) {
   const env = deps.env ?? process.env;
   const exists = deps.exists ?? existsSync;
-  const apiKey = env.OPENAI_API_KEY?.trim() ?? "";
+  const apiKey = resolveApiKey(env, deps.secretsPath)?.key ?? "";
   const python = settings.sttPython ?? venvPython(deps.venvDir ?? "");
   const hasLocal = Boolean(settings.sttPython || deps.venvDir) && exists(python);
-  return { env, apiKey, python, engines: pickEngines(settings.sttEngine, { hasKey: Boolean(apiKey), hasLocal }) };
+  return { env, apiKey, python, hasLocal, engines: pickEngines(settings.sttEngine, { hasKey: Boolean(apiKey), hasLocal }) };
+}
+
+/** Whether a Python with faster-whisper is in place (the plugin venv or `sttPython`). */
+export function hasLocalEngine(settings: SttSettings, deps: SttDeps = {}): boolean {
+  return resolve(settings, deps).hasLocal;
 }
 
 /** One line for `/voicenote status`, e.g. "auto → openai (gpt-4o-mini-transcribe)". */

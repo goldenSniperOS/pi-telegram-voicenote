@@ -41,6 +41,8 @@ async function setup(fileConfig: Record<string, unknown> = {}, overrides: Partia
   };
   createExtension({
     configPath,
+    // Never read the real ~/.pi/agent key file from tests.
+    secretsPath: join(dir, "telegram-voicenote.secrets.json"),
     synthesize: async (text) => { spoken.push(text); return "/tmp/voice.ogg"; },
     importTelegramCommands: async () => ({ registerTelegramCommand: (r: any) => { telegramCommands.push(r); return () => {}; } }),
     ...overrides,

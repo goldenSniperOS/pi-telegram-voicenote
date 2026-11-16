@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createTranscriber,
+  describeStt,
   LOCAL_SCRIPT,
   pickEngines,
   PREFETCH_SCRIPT,
@@ -196,6 +197,20 @@ test("setupLocalStt creates the venv, installs faster-whisper and prefetches the
     "Downloading the faster-whisper model \"small\" (first time only)…",
   ]);
   assert.match(PREFETCH_SCRIPT, /WhisperModel\(sys\.argv\[1\]/);
+});
+
+test("transcriber: a key saved from the wizard is used when OPENAI_API_KEY is unset; the env key wins", async () => {
+  const keyFile = join(mkdtempSync(join(tmpdir(), "voicenote-stt-key-")), "telegram-voicenote.secrets.json");
+  writeFileSync(keyFile, JSON.stringify({ openaiApiKey: "sk-saved" }));
+  const auth: string[] = [];
+  const fetchStub = (async (_url: any, init: any) => { auth.push(init.headers.Authorization); return new Response('{"text":"ok"}'); }) as any;
+  const path = audioFile();
+  const base = { fetch: fetchStub, exists: () => false, venvDir: "/none", secretsPath: keyFile };
+  assert.equal(await createTranscriber(() => settings(), { ...base, env: {} })(voice(path)), "ok");
+  assert.equal(await createTranscriber(() => settings(), { ...base, env: { OPENAI_API_KEY: "sk-env" } })(voice(path)), "ok");
+  assert.deepEqual(auth, ["Bearer sk-saved", "Bearer sk-env"]);
+  assert.equal(describeStt(settings(), { ...base, env: {} }), "auto → openai (gpt-4o-mini-transcribe)");
+  assert.equal(describeStt(settings(), { env: {}, exists: () => false, venvDir: "/none" }), "auto → not configured");
 });
 
 test("setupLocalStt stops at the first failing step", async () => {
