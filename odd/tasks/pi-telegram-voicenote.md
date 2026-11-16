@@ -16,11 +16,11 @@ Port of goldenSniperOS/hermes-telegram-voicenote. Repo: goldenSniperOS/pi-telegr
 ## Tasks
 
 - T1 [S1,S2] Spike: deterministic voice marker on Telegram turns reaches pi-telegram planning; terminal rendering — inline — no commit — DONE (L4)
-- T2 [S6] Scaffold package (manifest, tsconfig, node test runner, LICENSE, README stub) — inline — commit
-- T3 [S3] Script writer: port prompt + plain fallback + word cap — inline — commit
-- T4 [S5] Edge TTS → OGG/Opus via ffmpeg, long-script splitting — inline — commit
-- T5 [S2,S3,S7] Extension wiring: synthesis provider, marker, /voicenote, config, model call with timeout — inline — commit
-- T6 [S4,S6] Docs: install, pi-telegram setup, STT, config — inline — commit
+- T2 [S6] Scaffold package (manifest, tsconfig, node test runner, LICENSE, README stub) — inline — commit — DONE (88ea601)
+- T3 [S3] Script writer: port prompt + plain fallback + word cap — inline — commit — DONE (6e4d27a)
+- T4 [S5] Edge TTS → OGG/Opus via ffmpeg, long-script splitting — inline — commit — DONE (6e4d27a)
+- T5 [S2,S3,S7] Extension wiring: synthesis provider, marker, /voicenote, config, model call with timeout — inline — commit — DONE (850c656)
+- T6 [S4,S6] Docs: install, pi-telegram setup, STT, config — inline — commit — DONE (README)
 - T7 [S6] Publish: public GitHub repo, tag + release v0.1.0 (npm later, needs user's npm account) — inline
 - T8 [S1-S4] Live acceptance with the user's bot — user + inline
 
@@ -30,3 +30,4 @@ Port of goldenSniperOS/hermes-telegram-voicenote. Repo: goldenSniperOS/pi-telegr
 - L2 (user decisions): name pi-telegram-voicenote; TTS Edge TTS; script by a Pi model; read Pi docs + clone refs into .refs/.
 - L3 (evidence, explorer): pi-telegram registries are globalThis Maps (lib/voice.ts:11). Synthesis provider `(text, {lang,rate}) => Promise<path|undefined>`, no ctx. mirror/always drop text (queue.ts:2277-2288); manual + `<!-- telegram_voice -->` delivers text first, then voice (queue.ts:2584-2622). Programmatic text outbound handlers are never consumed and run after markup parsing. No public sendVoice API. Synthesis runs in the instance owning the turn → companion loaded in every instance. Maintainer (issue #235) endorses manual + telegram_voice for text+voice and companion-owned settings.
 - L4 (T1 evidence): `pi -e spike.ts -p "[telegram]\n..."`: before_agent_start sees prompt starting with `[telegram]` (pi-telegram queue.ts:1431); a `message_end` replacement appending `<!-- telegram_voice {"text":"@reply"} -->` reaches `agent_end` event.messages (pi-telegram extracts the final text there, queue.ts:2191). Skip stopReason error/aborted/toolUse. Pi TUI markdown strips HTML comments (pi-tui markdown.js:173-191), so S1 holds in the TUI; print mode shows it raw. Plan: marker `@reply:<id>` + in-memory cache of the reply; strip the marker from LLM context via the `context` hook; register the provider in the globalThis Map `__piTelegramVoiceSynthesisProviders__` (no hard dependency); our provider returns undefined for foreign text. Caveat: configured telegram.json voice outboundHandlers run before providers and would receive the sentinel.
+- L5 (T2-T5 evidence): worker implemented; `npm run check` 30/30 pass, tsc clean. Live smoke: real Edge TTS + ffmpeg produced opus mono 48k OGG (9.1s); real `pi -e src/index.ts -p "[telegram]..."` appended the marker and the registered provider returned an .ogg path. Project had no own .git (root was ~); fixed with `git init` in the project and HEAD of ~ restored to main.
