@@ -6,6 +6,22 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
+### Added
+- Voice input: incoming Telegram voice notes are transcribed and reach Pi as text, through
+  pi-telegram's transcription provider registry. Engines: OpenAI (`OPENAI_API_KEY`,
+  `gpt-4o-mini-transcribe` by default) and local faster-whisper (`small` by default).
+  `sttEngine: "auto"` prefers OpenAI when a key exists, falls back to local, and otherwise
+  tells the agent how to configure an engine.
+- `/voicenote setup-stt [confirm]`: guided, explicit install of faster-whisper in a
+  plugin-owned Python environment, with the model prefetched.
+- `/voicenote stt auto|openai|faster-whisper|off`, and the engine in use in `/voicenote status`.
+- Settings `sttEngine`, `sttOpenaiModel`, `sttLocalModel`, `sttLanguage`, `sttTimeoutMs`, `sttPython`.
+
+### Changed
+- Unknown `/voicenote` arguments now print the full usage, including the new subcommands.
+
 ## [0.1.0] - 2026-11-16
 
 ### Added

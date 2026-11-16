@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, configPath, loadConfig, saveConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, configPath, loadConfig, saveConfig, sttVenvDir } from "../src/config.ts";
 
 const dir = () => mkdtempSync(join(tmpdir(), "voicenote-config-"));
 
@@ -68,4 +68,35 @@ test("configPath honors PI_CODING_AGENT_DIR", () => {
   assert.equal(configPath({ PI_CODING_AGENT_DIR: "/x/agent" }, "/home/u"), join("/x/agent", "telegram-voicenote.json"));
   assert.equal(configPath({ PI_CODING_AGENT_DIR: "~/alt" }, "/home/u"), join("/home/u", "alt", "telegram-voicenote.json"));
   assert.equal(configPath({}, "/home/u"), join("/home/u", ".pi", "agent", "telegram-voicenote.json"));
+});
+
+test("speech-to-text settings default to auto, small and OpenAI's mini model", () => {
+  const { config } = loadConfig(join(dir(), "none.json"));
+  assert.equal(config.sttEngine, "auto");
+  assert.equal(config.sttLocalModel, "small");
+  assert.equal(config.sttOpenaiModel, "gpt-4o-mini-transcribe");
+  assert.equal(config.sttLanguage, "auto");
+  assert.equal(config.sttTimeoutMs, 120_000);
+  assert.equal(config.sttPython, undefined);
+});
+
+test("speech-to-text settings are validated", () => {
+  const path = join(dir(), "c.json");
+  writeFileSync(path, JSON.stringify({ sttEngine: "local", sttLocalModel: "large-v3", sttOpenaiModel: "whisper-1", sttLanguage: " es ", sttTimeoutMs: 1, sttPython: " /opt/py " }));
+  const { config } = loadConfig(path);
+  assert.equal(config.sttEngine, "faster-whisper");
+  assert.equal(config.sttLocalModel, "large-v3");
+  assert.equal(config.sttOpenaiModel, "whisper-1");
+  assert.equal(config.sttLanguage, "es");
+  assert.equal(config.sttTimeoutMs, 10_000);
+  assert.equal(config.sttPython, "/opt/py");
+  writeFileSync(path, JSON.stringify({ sttEngine: "whisperx", sttLocalModel: "bad model;rm" }));
+  const bad = loadConfig(path).config;
+  assert.equal(bad.sttEngine, "auto");
+  assert.equal(bad.sttLocalModel, "small");
+});
+
+test("the local speech-to-text venv lives next to the settings file", () => {
+  assert.equal(sttVenvDir({ PI_CODING_AGENT_DIR: "/agent" }, "/home/u"), join("/agent", "telegram-voicenote", "stt-venv"));
+  assert.equal(sttVenvDir({}, "/home/u"), join("/home/u", ".pi", "agent", "telegram-voicenote", "stt-venv"));
 });
