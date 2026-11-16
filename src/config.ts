@@ -21,6 +21,27 @@ export interface VoicenoteConfig {
   rate: string;
   minResponseChars: number;
   ffmpegPath: string;
+  /** Speech-to-text for incoming voice notes. */
+  sttEngine: SttEngine;
+  sttOpenaiModel: string;
+  /** faster-whisper model name or Hugging Face repo id. */
+  sttLocalModel: string;
+  /** ISO code such as "es", or "auto" to let the engine detect it. */
+  sttLanguage: string;
+  sttTimeoutMs: number;
+  /** Python with faster-whisper; undefined = the plugin's own venv. */
+  sttPython: string | undefined;
+}
+
+export const STT_ENGINES = ["auto", "openai", "faster-whisper", "off"] as const;
+export type SttEngine = (typeof STT_ENGINES)[number];
+
+/** Accepts the canonical names plus "local" as an alias of faster-whisper. */
+export function parseSttEngine(value: unknown): SttEngine | undefined {
+  if (typeof value !== "string") return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === "local") return "faster-whisper";
+  return (STT_ENGINES as readonly string[]).includes(v) ? (v as SttEngine) : undefined;
 }
 
 export const DEFAULT_CONFIG: Readonly<VoicenoteConfig> = Object.freeze({
@@ -35,14 +56,28 @@ export const DEFAULT_CONFIG: Readonly<VoicenoteConfig> = Object.freeze({
   rate: "+0%",
   minResponseChars: 1,
   ffmpegPath: "ffmpeg",
+  sttEngine: "auto",
+  sttOpenaiModel: "gpt-4o-mini-transcribe",
+  sttLocalModel: "small",
+  sttLanguage: "auto",
+  sttTimeoutMs: 120_000,
+  sttPython: undefined,
 });
 
-export function configPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+function agentDir(env: NodeJS.ProcessEnv, home: string): string {
   const override = env.PI_CODING_AGENT_DIR?.trim();
-  const agentDir = override
+  return override
     ? override === "~" || override.startsWith("~/") ? join(home, override.slice(1)) : override
     : join(home, ".pi", "agent");
-  return join(agentDir, "telegram-voicenote.json");
+}
+
+export function configPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+  return join(agentDir(env, home), "telegram-voicenote.json");
+}
+
+/** The Python venv that `/voicenote setup-stt` creates for faster-whisper. */
+export function sttVenvDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+  return join(agentDir(env, home), "telegram-voicenote", "stt-venv");
 }
 
 const clampInt = (value: unknown, fallback: number, min: number, max: number): number =>
@@ -69,6 +104,13 @@ export function normalizeConfig(raw: Record<string, unknown>): VoicenoteConfig {
     rate: matching(raw.rate, /^[+-]\d{1,3}%$/, d.rate),
     minResponseChars: clampInt(raw.minResponseChars, d.minResponseChars, 1, 1_000_000),
     ffmpegPath: str(raw.ffmpegPath, d.ffmpegPath),
+    sttEngine: parseSttEngine(raw.sttEngine) ?? d.sttEngine,
+    sttOpenaiModel: matching(raw.sttOpenaiModel, /^[A-Za-z0-9._:-]+$/, d.sttOpenaiModel),
+    // Passed as a process argument and a Hugging Face id: keep it to safe characters.
+    sttLocalModel: matching(raw.sttLocalModel, /^[A-Za-z0-9._\/-]+$/, d.sttLocalModel),
+    sttLanguage: str(raw.sttLanguage, d.sttLanguage),
+    sttTimeoutMs: clampInt(raw.sttTimeoutMs, d.sttTimeoutMs, 10_000, 1_800_000),
+    sttPython: typeof raw.sttPython === "string" && raw.sttPython.trim() ? raw.sttPython.trim() : undefined,
   };
 }
 

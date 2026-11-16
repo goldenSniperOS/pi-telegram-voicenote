@@ -5,22 +5,28 @@
  * message gets a `telegram_voice` marker naming a cached reply. pi-telegram delivers
  * the text, then calls our synthesis provider with the sentinel; we narrate the
  * cached reply with a Pi model, synthesize it, and return the OGG path.
+ *
+ * Voice input: we also register a transcription provider, so voice notes the
+ * user sends reach the agent as text (OpenAI or local faster-whisper, see stt.ts).
  */
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { configPath as defaultConfigPath, loadConfig, saveConfig, type VoicenoteConfig } from "./config.ts";
+import { configPath as defaultConfigPath, loadConfig, saveConfig, sttVenvDir, type VoicenoteConfig } from "./config.ts";
 import { buildMarker, hasVoiceMarkup, parseMarkerId, stripMarkers } from "./marker.ts";
 import { makeScript, type ScriptWriter } from "./script.ts";
+import { createTranscriber, describeStt, type SttDeps, type TranscriptionFile } from "./stt.ts";
 import { synthesize as defaultSynthesize, type TtsSettings } from "./tts.ts";
 
 export const PROVIDER_ID = "pi-telegram-voicenote";
 export const REGISTRY_KEY = "__piTelegramVoiceSynthesisProviders__";
+export const TRANSCRIPTION_REGISTRY_KEY = "__piTelegramVoiceTranscriptionProviders__";
 const TELEGRAM_PREFIX = "[telegram]";
 const CACHE_SIZE = 20;
 const FINAL_STOP_REASONS = new Set(["stop", "length"]);
 
 type SynthesisProvider = (text: string, options?: { lang?: string; rate?: string }) => Promise<string | undefined>;
+type TranscriptionProvider = (file: TranscriptionFile, options?: { language?: string }) => Promise<string | undefined>;
 
 interface TelegramCommandContext {
   args: string;
@@ -38,18 +44,22 @@ export interface ExtensionDeps {
   configPath?: string;
   synthesize?: (text: string, settings: TtsSettings) => Promise<string>;
   importTelegramCommands?: () => Promise<TelegramCommandsModule>;
+  stt?: SttDeps;
 }
 
 const TELEGRAM_COMMANDS_MODULE = "@llblab/pi-telegram/commands";
 
-function providerRegistry(): Map<string, SynthesisProvider> {
+function globalRegistry<T>(key: string): Map<string, T> {
   const global = globalThis as Record<string, unknown>;
-  const existing = global[REGISTRY_KEY];
-  if (existing instanceof Map) return existing as Map<string, SynthesisProvider>;
-  const created = new Map<string, SynthesisProvider>();
-  global[REGISTRY_KEY] = created;
+  const existing = global[key];
+  if (existing instanceof Map) return existing as Map<string, T>;
+  const created = new Map<string, T>();
+  global[key] = created;
   return created;
 }
+
+const providerRegistry = () => globalRegistry<SynthesisProvider>(REGISTRY_KEY);
+const transcriptionRegistry = () => globalRegistry<TranscriptionProvider>(TRANSCRIPTION_REGISTRY_KEY);
 
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
@@ -65,12 +75,14 @@ export function createExtension(deps: ExtensionDeps = {}) {
   const synthesize = deps.synthesize ?? defaultSynthesize;
   const importTelegramCommands =
     deps.importTelegramCommands ?? (() => import(TELEGRAM_COMMANDS_MODULE) as Promise<TelegramCommandsModule>);
+  const sttDeps: SttDeps = { venvDir: sttVenvDir(), ...deps.stt };
 
   return function voicenote(pi: ExtensionAPI): void {
     let config: VoicenoteConfig = loadConfig(path).config;
     let ctx: ExtensionContext | undefined;
     let telegramTurn = false;
     let provider: SynthesisProvider | undefined;
+    let transcriber: TranscriptionProvider | undefined;
     let disposeTelegramCommand: (() => void) | undefined;
     const replies = new Map<string, string>();
 
@@ -88,7 +100,7 @@ export function createExtension(deps: ExtensionDeps = {}) {
         return "Usage: /voicenote [on|off|status]";
       }
       const writer = config.scriptMode === "plain" ? "plain cleanup" : `model ${config.model ?? "(current)"}`;
-      return `Voice notes: ${config.enabled ? "on" : "off"} · voice ${config.voice} · script by ${writer}`;
+      return `Voice notes: ${config.enabled ? "on" : "off"} · voice ${config.voice} · script by ${writer} · voice input: ${describeStt(config, sttDeps)}`;
     };
 
     const scriptWriter = (): ScriptWriter | undefined => {
@@ -137,6 +149,9 @@ export function createExtension(deps: ExtensionDeps = {}) {
       if (loaded.warning) warn(loaded.warning);
       provider = narrate;
       providerRegistry().set(PROVIDER_ID, provider);
+      // Settings are re-read per voice note so /voicenote and file edits apply at once.
+      transcriber = createTranscriber(() => loadConfig(path).config, sttDeps);
+      transcriptionRegistry().set(PROVIDER_ID, transcriber);
       if (!disposeTelegramCommand) {
         try {
           const mod = await importTelegramCommands();
@@ -155,6 +170,9 @@ export function createExtension(deps: ExtensionDeps = {}) {
       const registry = providerRegistry();
       if (provider && registry.get(PROVIDER_ID) === provider) registry.delete(PROVIDER_ID);
       provider = undefined;
+      const transcribers = transcriptionRegistry();
+      if (transcriber && transcribers.get(PROVIDER_ID) === transcriber) transcribers.delete(PROVIDER_ID);
+      transcriber = undefined;
       disposeTelegramCommand?.();
       disposeTelegramCommand = undefined;
     });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createExtension, PROVIDER_ID, REGISTRY_KEY, type ExtensionDeps } from "../src/index.ts";
+import { createExtension, PROVIDER_ID, REGISTRY_KEY, TRANSCRIPTION_REGISTRY_KEY, type ExtensionDeps } from "../src/index.ts";
 import { buildMarker } from "../src/marker.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
@@ -159,4 +159,26 @@ test("session_shutdown unregisters only our own provider", async () => {
   await env2.emit("session_shutdown", { reason: "quit" });
   assert.equal(registry().get(PROVIDER_ID), other);
   registry().delete(PROVIDER_ID);
+});
+
+test("a transcription provider is registered and transcribes Telegram voice notes", async () => {
+  const env = await setup({}, {
+    stt: { env: { OPENAI_API_KEY: "sk" }, fetch: (async () => new Response('{"text":"hola desde telegram"}')) as any, exists: () => false, venvDir: "/none" },
+  });
+  const transcribers: Map<string, any> = (globalThis as any)[TRANSCRIPTION_REGISTRY_KEY];
+  const transcribe = transcribers.get(PROVIDER_ID);
+  const dir = mkdtempSync(join(tmpdir(), "voicenote-in-"));
+  writeFileSync(join(dir, "v.ogg"), "OggS");
+  assert.equal(await transcribe({ path: join(dir, "v.ogg"), mimeType: "audio/ogg", kind: "voice" }, {}), "hola desde telegram");
+  await env.emit("session_shutdown", { reason: "quit" });
+  assert.equal(transcribers.has(PROVIDER_ID), false);
+});
+
+test("/voicenote status reports the speech-to-text engine in use", async () => {
+  const env = await setup({}, { stt: { env: {}, exists: () => false, venvDir: "/none" } });
+  await env.commands.get("voicenote").handler("status", env.ctx);
+  assert.match(env.notes.at(-1)!, /voice input: auto → not configured/);
+  const cloud = await setup({}, { stt: { env: { OPENAI_API_KEY: "sk" }, exists: () => false, venvDir: "/none" } });
+  await cloud.commands.get("voicenote").handler("status", cloud.ctx);
+  assert.match(cloud.notes.at(-1)!, /voice input: auto → openai \(gpt-4o-mini-transcribe\)/);
 });
