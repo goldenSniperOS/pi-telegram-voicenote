@@ -1,0 +1,162 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createExtension, PROVIDER_ID, REGISTRY_KEY, type ExtensionDeps } from "../src/index.ts";
+import { buildMarker } from "../src/marker.ts";
+
+type Handler = (event: any, ctx: any) => unknown;
+type Provider = (text: string, options?: { lang?: string; rate?: string }) => Promise<string | undefined>;
+
+function registry(): Map<string, Provider> {
+  return (globalThis as any)[REGISTRY_KEY];
+}
+
+async function setup(fileConfig: Record<string, unknown> = {}, overrides: Partial<ExtensionDeps> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "voicenote-index-"));
+  const configPath = join(dir, "telegram-voicenote.json");
+  writeFileSync(configPath, JSON.stringify(fileConfig));
+  const handlers = new Map<string, Handler>();
+  const commands = new Map<string, any>();
+  const telegramCommands: any[] = [];
+  const completions: any[] = [];
+  const spoken: string[] = [];
+  const notes: string[] = [];
+  const pi = {
+    on: (name: string, h: Handler) => handlers.set(name, h),
+    registerCommand: (name: string, opts: any) => commands.set(name, opts),
+  };
+  const ctx = {
+    hasUI: true,
+    ui: { notify: (m: string) => notes.push(m) },
+    model: { provider: "cur", id: "model" },
+    modelRegistry: {
+      find: (provider: string, id: string) => (provider === "alt" ? { provider, id } : undefined),
+      complete: async (model: any, context: any, options: any) => {
+        completions.push({ model, context, options });
+        return { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Narrated script." }] };
+      },
+    },
+  };
+  createExtension({
+    configPath,
+    synthesize: async (text) => { spoken.push(text); return "/tmp/voice.ogg"; },
+    importTelegramCommands: async () => ({ registerTelegramCommand: (r: any) => { telegramCommands.push(r); return () => {}; } }),
+    ...overrides,
+  })(pi as any);
+  const emit = (name: string, event: any = {}) => handlers.get(name)!({ type: name, ...event }, ctx);
+  await emit("session_start", { reason: "startup" });
+  return { configPath, handlers, commands, telegramCommands, completions, spoken, notes, ctx, emit };
+}
+
+const assistant = (text: string, stopReason = "stop") => ({
+  role: "assistant", stopReason, content: [{ type: "text", text }],
+});
+
+async function telegramReply(env: Awaited<ReturnType<typeof setup>>, text = "| a | b |\n|---|---|\n| 1 | 2 |") {
+  await env.emit("before_agent_start", { messageType: "user", prompt: "[telegram]\nhello" });
+  return (await env.emit("message_end", { message: assistant(text) })) as any;
+}
+
+function markerText(result: any): string {
+  return result.message.content.at(-1).text.trim();
+}
+
+test("Telegram turn gets the marker appended and the provider narrates it", async () => {
+  const env = await setup();
+  const result = await telegramReply(env);
+  assert.ok(result?.message);
+  assert.equal(result.message.content[0].text, "| a | b |\n|---|---|\n| 1 | 2 |");
+  const marker = markerText(result);
+  assert.match(marker, /^<!-- telegram_voice \{"text":"@pi-telegram-voicenote:[\w-]+"\} -->$/);
+  const sentinel = JSON.parse(marker.slice(marker.indexOf("{"), marker.lastIndexOf("}") + 1)).text;
+  const provider = registry().get(PROVIDER_ID)!;
+  assert.equal(await provider(sentinel), "/tmp/voice.ogg");
+  assert.deepEqual(env.spoken, ["Narrated script."]);
+  const call = env.completions[0];
+  assert.deepEqual(call.model, { provider: "cur", id: "model" });
+  assert.match(call.context.systemPrompt, /Maximum 180 words/);
+  assert.equal(call.context.messages[0].content, "| a | b |\n|---|---|\n| 1 | 2 |");
+  assert.ok(call.options.signal instanceof AbortSignal);
+});
+
+test("configured model is resolved through the registry", async () => {
+  const env = await setup({ model: "alt/small" });
+  const sentinel = JSON.parse(markerText(await telegramReply(env)).match(/\{.*\}/)![0]).text;
+  await registry().get(PROVIDER_ID)!(sentinel);
+  assert.deepEqual(env.completions[0].model, { provider: "alt", id: "small" });
+});
+
+test("terminal turns, tool calls, errors and existing voice markup are untouched", async () => {
+  const env = await setup();
+  await env.emit("before_agent_start", { messageType: "user", prompt: "hello from terminal" });
+  assert.equal(await env.emit("message_end", { message: assistant("hi") }), undefined);
+  await env.emit("before_agent_start", { messageType: "user", prompt: "[telegram]\nhi" });
+  for (const reason of ["toolUse", "error", "aborted"]) {
+    assert.equal(await env.emit("message_end", { message: assistant("partial", reason) }), undefined);
+  }
+  assert.equal(await env.emit("message_end", { message: { role: "user", content: "x" } }), undefined);
+  assert.equal(await env.emit("message_end", { message: assistant('x <!-- telegram_voice {"text":"y"} -->') }), undefined);
+  await env.emit("before_agent_start", { messageType: "custom", message: {} });
+  assert.equal(await env.emit("message_end", { message: assistant("hi") }), undefined);
+});
+
+test("minResponseChars and disabled config skip the marker", async () => {
+  const env = await setup({ minResponseChars: 50 });
+  assert.equal(await telegramReply(env, "short"), undefined);
+  const off = await setup({ enabled: false });
+  assert.equal(await telegramReply(off), undefined);
+});
+
+test("provider ignores foreign text and unknown ids", async () => {
+  await setup();
+  const provider = registry().get(PROVIDER_ID)!;
+  assert.equal(await provider("Hello, speak this"), undefined);
+  assert.equal(await provider("@pi-telegram-voicenote:missing"), undefined);
+});
+
+test("provider returns undefined and notifies when synthesis fails", async () => {
+  const env = await setup({}, { synthesize: async () => { throw new Error("tts down"); } });
+  const sentinel = JSON.parse(markerText(await telegramReply(env)).match(/\{.*\}/)![0]).text;
+  assert.equal(await registry().get(PROVIDER_ID)!(sentinel), undefined);
+  assert.ok(env.notes.some((n) => /tts down/.test(n)));
+});
+
+test("context hook strips our marker so the model never sees it", async () => {
+  const env = await setup();
+  const messages = [{ role: "user", content: "q" }, { role: "assistant", content: [{ type: "text", text: "A" }, { type: "text", text: `\n\n${buildMarker("id-1")}` }] }];
+  const result: any = await env.emit("context", { messages });
+  assert.deepEqual(result.messages[1].content, [{ type: "text", text: "A" }]);
+  assert.equal(await env.emit("context", { messages: [{ role: "user", content: "q" }] }), undefined);
+});
+
+test("/voicenote toggles and persists; Telegram command is registered", async () => {
+  const env = await setup();
+  const cmd = env.commands.get("voicenote");
+  await cmd.handler("off", env.ctx);
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).enabled, false);
+  assert.equal(await telegramReply(env), undefined);
+  await cmd.handler("on", env.ctx);
+  assert.ok(await telegramReply(env));
+  await cmd.handler("status", env.ctx);
+  assert.match(env.notes.at(-1)!, /on/);
+  assert.equal(env.telegramCommands[0].name, "voicenote");
+  const replies: string[] = [];
+  await env.telegramCommands[0].handler({ name: "voicenote", args: "off", reply: (t: string) => replies.push(t), enqueuePrompt: async () => {} });
+  assert.match(replies[0]!, /off/);
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).enabled, false);
+});
+
+test("session_shutdown unregisters only our own provider", async () => {
+  const env = await setup();
+  assert.ok(registry().has(PROVIDER_ID));
+  await env.emit("session_shutdown", { reason: "quit" });
+  assert.equal(registry().has(PROVIDER_ID), false);
+  const other: Provider = async () => undefined;
+  const env2 = await setup();
+  registry().set(PROVIDER_ID, other);
+  await env2.emit("session_shutdown", { reason: "quit" });
+  assert.equal(registry().get(PROVIDER_ID), other);
+  registry().delete(PROVIDER_ID);
+});
