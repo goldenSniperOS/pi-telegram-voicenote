@@ -7,6 +7,8 @@ import {
   createTranscriber,
   LOCAL_SCRIPT,
   pickEngines,
+  PREFETCH_SCRIPT,
+  setupLocalStt,
   transcribeLocal,
   transcribeOpenAI,
   type SttSettings,
@@ -171,4 +173,36 @@ test("transcriber: an explicit sttPython is used instead of the venv", async () 
   });
   assert.equal(await transcribe(voice("/a/v.ogg")), "ok");
   assert.deepEqual(bins, ["/opt/py"]);
+});
+
+test("setupLocalStt creates the venv, installs faster-whisper and prefetches the model", async () => {
+  const runs: string[] = [];
+  const progress: string[] = [];
+  const python = await setupLocalStt({
+    venvDir: "/venv", model: "small", basePython: "python3",
+    run: async (bin, args) => { runs.push([bin, ...args.filter((a) => a !== PREFETCH_SCRIPT)].join(" ")); return "ok\n"; },
+    progress: (m) => progress.push(m),
+  });
+  const py = join("/venv", "bin", "python");
+  assert.equal(python, py);
+  assert.deepEqual(runs, [
+    "python3 -m venv /venv",
+    `${py} -m pip install --upgrade faster-whisper`,
+    `${py} -c small`,
+  ]);
+  assert.deepEqual(progress, [
+    "Creating a Python environment in /venv…",
+    "Installing faster-whisper (pip)…",
+    "Downloading the faster-whisper model \"small\" (first time only)…",
+  ]);
+  assert.match(PREFETCH_SCRIPT, /WhisperModel\(sys\.argv\[1\]/);
+});
+
+test("setupLocalStt stops at the first failing step", async () => {
+  const runs: string[] = [];
+  await assert.rejects(
+    setupLocalStt({ venvDir: "/venv", model: "small", run: async (bin, args) => { runs.push(args[1]!); throw new Error("No module named venv"); } }),
+    /creating the Python environment failed: No module named venv/,
+  );
+  assert.equal(runs.length, 1);
 });

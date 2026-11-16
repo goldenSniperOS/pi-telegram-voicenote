@@ -182,3 +182,43 @@ test("/voicenote status reports the speech-to-text engine in use", async () => {
   await cloud.commands.get("voicenote").handler("status", cloud.ctx);
   assert.match(cloud.notes.at(-1)!, /voice input: auto → openai \(gpt-4o-mini-transcribe\)/);
 });
+
+test("/voicenote stt <engine> switches and persists the voice input engine", async () => {
+  const env = await setup({}, { stt: { env: { OPENAI_API_KEY: "sk" }, exists: () => true, venvDir: "/venv" } });
+  const cmd = env.commands.get("voicenote");
+  await cmd.handler("stt local", env.ctx);
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).sttEngine, "faster-whisper");
+  assert.match(env.notes.at(-1)!, /voice input: faster-whisper → faster-whisper \(small\)/);
+  await cmd.handler("stt off", env.ctx);
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).sttEngine, "off");
+  assert.match(env.notes.at(-1)!, /voice input: off/);
+  await cmd.handler("stt whisperx", env.ctx);
+  assert.equal(env.notes.at(-1), "Usage: /voicenote stt auto|openai|faster-whisper|off");
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).sttEngine, "off");
+});
+
+test("/voicenote setup-stt explains first and installs only with confirm", async () => {
+  const runs: string[][] = [];
+  const venvDir = join(mkdtempSync(join(tmpdir(), "voicenote-venv-")), "stt-venv");
+  const env = await setup({}, { stt: { env: {}, venvDir, exists: () => false, runPython: async (bin, args) => { runs.push([bin, ...args]); return "ok"; } } });
+  const cmd = env.commands.get("voicenote");
+  await cmd.handler("setup-stt", env.ctx);
+  assert.equal(runs.length, 0);
+  assert.equal(
+    env.notes.at(-1),
+    `This installs local speech-to-text: a Python environment in ${venvDir}, the faster-whisper package, and the "small" model (about 460 MB). Nothing leaves this machine when transcribing. Send /voicenote setup-stt confirm to proceed.`,
+  );
+  await cmd.handler("setup-stt confirm", env.ctx);
+  assert.equal(runs.length, 3);
+  assert.equal(env.notes.at(-1), `faster-whisper is ready (${join(venvDir, "bin", "python")}). Voice notes you send are now transcribed locally when no OPENAI_API_KEY is set.`);
+});
+
+test("/voicenote setup-stt reports a failure and Telegram gets progress", async () => {
+  const env = await setup({}, { stt: { env: {}, venvDir: "/venv", exists: () => false, runPython: async () => { throw new Error("pip exploded"); } } });
+  const replies: string[] = [];
+  await env.telegramCommands[0].handler({ name: "voicenote", args: "setup-stt confirm", reply: (t: string) => replies.push(t), enqueuePrompt: async () => {} });
+  assert.deepEqual(replies, [
+    "Creating a Python environment in /venv…",
+    "Local speech-to-text setup failed: creating the Python environment failed: pip exploded",
+  ]);
+});

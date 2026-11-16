@@ -12,10 +12,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { configPath as defaultConfigPath, loadConfig, saveConfig, sttVenvDir, type VoicenoteConfig } from "./config.ts";
+import { configPath as defaultConfigPath, loadConfig, parseSttEngine, saveConfig, sttVenvDir, type VoicenoteConfig } from "./config.ts";
 import { buildMarker, hasVoiceMarkup, parseMarkerId, stripMarkers } from "./marker.ts";
 import { makeScript, type ScriptWriter } from "./script.ts";
-import { createTranscriber, describeStt, type SttDeps, type TranscriptionFile } from "./stt.ts";
+import { createTranscriber, describeStt, modelSize, setupLocalStt, type SttDeps, type TranscriptionFile } from "./stt.ts";
 import { synthesize as defaultSynthesize, type TtsSettings } from "./tts.ts";
 
 export const PROVIDER_ID = "pi-telegram-voicenote";
@@ -46,6 +46,8 @@ export interface ExtensionDeps {
   importTelegramCommands?: () => Promise<TelegramCommandsModule>;
   stt?: SttDeps;
 }
+
+const USAGE = "Usage: /voicenote [on|off|status] · /voicenote stt auto|openai|faster-whisper|off · /voicenote setup-stt";
 
 const TELEGRAM_COMMANDS_MODULE = "@llblab/pi-telegram/commands";
 
@@ -91,14 +93,47 @@ export function createExtension(deps: ExtensionDeps = {}) {
       else console.warn(message);
     };
 
-    const toggle = (args: string): string => {
-      const arg = args.trim().toLowerCase();
-      if (arg === "on" || arg === "off") {
-        config = { ...config, enabled: arg === "on" };
-        saveConfig({ enabled: config.enabled }, path);
-      } else if (arg && arg !== "status") {
-        return "Usage: /voicenote [on|off|status]";
+    let setupRunning = false;
+
+    const setupStt = async (confirmed: boolean, say: (text: string) => unknown): Promise<string> => {
+      config = loadConfig(path).config;
+      const venvDir = sttDeps.venvDir!;
+      const model = config.sttLocalModel;
+      if (!confirmed) {
+        return `This installs local speech-to-text: a Python environment in ${venvDir}, the faster-whisper package, and the "${model}" model (${modelSize(model)}). Nothing leaves this machine when transcribing. Send /voicenote setup-stt confirm to proceed.`;
       }
+      if (setupRunning) return "Local speech-to-text setup is already running.";
+      setupRunning = true;
+      try {
+        const python = await setupLocalStt({ venvDir, model, run: sttDeps.runPython, progress: (m) => { void say(m); } });
+        return `faster-whisper is ready (${python}). Voice notes you send are now transcribed locally when no OPENAI_API_KEY is set.`;
+      } catch (error) {
+        return `Local speech-to-text setup failed: ${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        setupRunning = false;
+      }
+    };
+
+    const handleCommand = async (args: string, say: (text: string) => unknown): Promise<string> => {
+      const [sub = "", value = ""] = args.trim().toLowerCase().split(/\s+/);
+      if (sub === "setup-stt") return setupStt(value === "confirm", say);
+      if (sub === "stt") {
+        const engine = parseSttEngine(value);
+        if (!engine) return "Usage: /voicenote stt auto|openai|faster-whisper|off";
+        config = { ...loadConfig(path).config, sttEngine: engine };
+        saveConfig({ sttEngine: engine }, path);
+        return status();
+      }
+      if (sub === "on" || sub === "off") {
+        config = { ...config, enabled: sub === "on" };
+        saveConfig({ enabled: config.enabled }, path);
+      } else if (sub && sub !== "status") {
+        return USAGE;
+      }
+      return status();
+    };
+
+    const status = (): string => {
       const writer = config.scriptMode === "plain" ? "plain cleanup" : `model ${config.model ?? "(current)"}`;
       return `Voice notes: ${config.enabled ? "on" : "off"} · voice ${config.voice} · script by ${writer} · voice input: ${describeStt(config, sttDeps)}`;
     };
@@ -157,8 +192,8 @@ export function createExtension(deps: ExtensionDeps = {}) {
           const mod = await importTelegramCommands();
           disposeTelegramCommand = mod.registerTelegramCommand?.({
             name: "voicenote",
-            description: "Voice notes on/off/status",
-            handler: async (command) => { await command.reply(toggle(command.args)); },
+            description: "Voice notes: on, off, status, stt <engine>, setup-stt",
+            handler: async (command) => { await command.reply(await handleCommand(command.args, command.reply)); },
           });
         } catch {
           // pi-telegram's command API is optional; the Pi command still works.
@@ -202,9 +237,10 @@ export function createExtension(deps: ExtensionDeps = {}) {
     });
 
     pi.registerCommand("voicenote", {
-      description: "Telegram voice notes: on, off or status",
+      description: "Telegram voice notes: on, off, status, stt <engine>, setup-stt",
       handler: async (args, commandCtx) => {
-        commandCtx.ui.notify(toggle(args), "info");
+        const say = (text: string) => commandCtx.ui.notify(text, "info");
+        say(await handleCommand(args, say));
       },
     });
   };

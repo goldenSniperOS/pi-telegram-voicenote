@@ -179,3 +179,50 @@ export function createTranscriber(getSettings: () => SttSettings, deps: SttDeps 
     return `[Voice note not transcribed: ${failures.join("; ")}. Audio file: ${file.path}]`;
   };
 }
+
+/** Downloads the model into the Hugging Face cache so the first voice note is not slow. */
+export const PREFETCH_SCRIPT = `import sys
+from faster_whisper import WhisperModel
+WhisperModel(sys.argv[1], device="auto", compute_type="int8")
+print("ok")
+`;
+
+const MODEL_SIZES: Record<string, string> = {
+  tiny: "about 75 MB", base: "about 140 MB", small: "about 460 MB", medium: "about 1.5 GB",
+  "large-v3": "about 3 GB", "large-v3-turbo": "about 1.6 GB", turbo: "about 1.6 GB",
+};
+
+export const modelSize = (model: string): string => MODEL_SIZES[model] ?? "download size varies";
+
+const SETUP_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * Creates a plugin-owned venv, installs faster-whisper and prefetches `model`.
+ * Only ever runs from an explicit `/voicenote setup-stt confirm`.
+ */
+export async function setupLocalStt(options: {
+  venvDir: string;
+  model: string;
+  basePython?: string;
+  run?: PythonRunner;
+  progress?: (message: string) => void;
+}): Promise<string> {
+  const run = options.run ?? defaultRunPython;
+  const python = venvPython(options.venvDir);
+  const steps: Array<[string, string, string, string[]]> = [
+    [`Creating a Python environment in ${options.venvDir}…`, "creating the Python environment",
+      options.basePython ?? (process.platform === "win32" ? "python" : "python3"), ["-m", "venv", options.venvDir]],
+    ["Installing faster-whisper (pip)…", "installing faster-whisper", python, ["-m", "pip", "install", "--upgrade", "faster-whisper"]],
+    [`Downloading the faster-whisper model "${options.model}" (first time only)…`, "downloading the model",
+      python, ["-c", PREFETCH_SCRIPT, options.model]],
+  ];
+  for (const [message, label, bin, args] of steps) {
+    options.progress?.(message);
+    try {
+      await run(bin, args, SETUP_TIMEOUT_MS);
+    } catch (error) {
+      throw new Error(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return python;
+}
