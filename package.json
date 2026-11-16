@@ -1,0 +1,52 @@
+{
+  "name": "pi-telegram-voicenote",
+  "version": "0.1.0",
+  "description": "Narrated voice notes for pi-telegram: every Telegram reply from Pi also arrives as a spoken explanation.",
+  "type": "module",
+  "license": "MIT",
+  "author": "goldenSniperOS",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goldenSniperOS/pi-telegram-voicenote.git"
+  },
+  "homepage": "https://github.com/goldenSniperOS/pi-telegram-voicenote#readme",
+  "bugs": "https://github.com/goldenSniperOS/pi-telegram-voicenote/issues",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "telegram",
+    "voice",
+    "tts",
+    "pi-telegram"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "msedge-tts": "^2.1.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
