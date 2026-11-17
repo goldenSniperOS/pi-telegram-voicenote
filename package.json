@@ -1,6 +1,6 @@
 {
   "name": "pi-telegram-voicenote",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Voice notes both ways for pi-telegram: replies arrive as a narrated voice note, and your voice notes are transcribed (OpenAI or local faster-whisper).",
   "type": "module",
   "license": "MIT",

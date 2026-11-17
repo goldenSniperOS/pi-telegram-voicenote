@@ -6,6 +6,30 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-16
+
+### Added
+- Wizard: `/voicenote` (or `/voicenote menu`) in Pi opens an interactive menu. Every entry shows
+  its current value and every list marks the selected option: voice replies on/off, voice,
+  rate, voice input engine, OpenAI API key, OpenAI model, audio language, local engine install
+  and a test voice.
+- OpenAI API key from the wizard, saved in `~/.pi/agent/telegram-voicenote.secrets.json`
+  (mode 0600, separate from the settings). `OPENAI_API_KEY` in the environment still wins.
+  Status shows only `set (env)`, `set (saved)` or `not set`.
+- Telegram: a "🎙 Voice notes" section with buttons in the bot menu (pi-telegram
+  `registerTelegramSection`), with the same options except entering the key.
+- New subcommands for Pi and Telegram: `voice`, `rate`, `model`, `lang`, `test`, `key`, `menu`.
+  Without a value they list the choices with the current one marked.
+- `/voicenote test` from Telegram queues a short turn, so the answer arrives as a real voice note.
+
+### Security
+- Telegram never accepts an API key: `/voicenote key …` and the key button store nothing and
+  never repeat the input; the key is entered only from the Pi terminal.
+
+### Changed
+- The status line also shows the rate and the OpenAI key state.
+- Voice and model names are limited to 64 characters.
+
 ## [0.2.0] - 2026-11-16
 
 ### Added

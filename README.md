@@ -26,7 +26,7 @@ This is the Pi port of [hermes-telegram-voicenote](https://github.com/goldenSnip
 pi install git:github.com/goldenSniperOS/pi-telegram-voicenote
 ```
 
-Pin a version with `@v0.2.0` at the end. To try it for one run only: `pi -e git:github.com/goldenSniperOS/pi-telegram-voicenote`.
+Pin a version with `@v0.3.0` at the end. To try it for one run only: `pi -e git:github.com/goldenSniperOS/pi-telegram-voicenote`.
 
 Install it wherever pi-telegram is installed. In Threaded Mode every Pi instance synthesizes its own replies, so every instance needs this extension loaded (a global `pi install` covers them all).
 
