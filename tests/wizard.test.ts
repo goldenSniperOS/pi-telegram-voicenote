@@ -266,6 +266,15 @@ test("OpenAI API key: the environment key is shown as set (env) and explained", 
   assert.equal(existsSync(env.keyPath), false);
 });
 
+test("/voicenote key in the Pi terminal opens the key dialog directly", async () => {
+  const env = await setup();
+  await env.run("key", { select: [pick("Paste")], input: ["sk-direct-KEY"] });
+  assert.equal(env.selects.length, 1);
+  assert.match(env.selects[0]!.title, /OpenAI API key/);
+  assert.deepEqual(JSON.parse(readFileSync(env.keyPath, "utf8")), { openaiApiKey: "sk-direct-KEY" });
+  assert.doesNotMatch(env.shown(), /sk-direct-KEY/);
+});
+
 test("install local engine asks for confirmation and runs setup only when confirmed", async () => {
   const env = await setup();
   await env.run("", { select: [pick("Local engine"), pick("Local engine"), pick("Done")], confirm: [false, true] });

@@ -85,7 +85,8 @@ async function pickValue(
   return parsed;
 }
 
-async function keyMenu(ui: WizardUI, c: VoicenoteController): Promise<void> {
+/** Paste, replace or delete the saved OpenAI API key. Also opened by `/voicenote key` in Pi. */
+export async function runKeyMenu(ui: WizardUI, c: VoicenoteController): Promise<void> {
   const state = c.keyState();
   const saved = c.hasSavedKey();
   const title = state === "set (env)"
@@ -141,7 +142,7 @@ async function act(action: Action, ui: WizardUI, c: VoicenoteController): Promis
       return;
     }
     case "key":
-      return keyMenu(ui, c);
+      return runKeyMenu(ui, c);
     case "model": {
       const model = await pickValue(ui, `OpenAI model — current: ${config.sttOpenaiModel}`, choiceList(OPENAI_MODEL_PRESETS, config.sttOpenaiModel, true), {
         prompt: "OpenAI transcription model", placeholder: "gpt-4o-transcribe", parse: parseOpenaiModel,
