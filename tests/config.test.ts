@@ -100,3 +100,15 @@ test("the local speech-to-text venv lives next to the settings file", () => {
   assert.equal(sttVenvDir({ PI_CODING_AGENT_DIR: "/agent" }, "/home/u"), join("/agent", "telegram-voicenote", "stt-venv"));
   assert.equal(sttVenvDir({}, "/home/u"), join("/home/u", ".pi", "agent", "telegram-voicenote", "stt-venv"));
 });
+
+test("voice and model names longer than 64 characters are rejected", () => {
+  const path = join(dir(), "c.json");
+  const long = "a".repeat(65);
+  writeFileSync(path, JSON.stringify({ voice: long, sttOpenaiModel: long, sttLocalModel: long }));
+  const { config } = loadConfig(path);
+  assert.equal(config.voice, DEFAULT_CONFIG.voice);
+  assert.equal(config.sttOpenaiModel, DEFAULT_CONFIG.sttOpenaiModel);
+  assert.equal(config.sttLocalModel, DEFAULT_CONFIG.sttLocalModel);
+  writeFileSync(path, JSON.stringify({ voice: "a".repeat(64) }));
+  assert.equal(loadConfig(path).config.voice, "a".repeat(64));
+});

@@ -82,10 +82,10 @@ export function secretsPath(env: NodeJS.ProcessEnv = process.env, home = homedir
 
 // Voice and rate end up inside SSML attributes; model names are sent to APIs and
 // process arguments: allow only safe characters.
-export const VOICE_PATTERN = /^[A-Za-z0-9-]+$/;
+export const VOICE_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
 export const RATE_PATTERN = /^[+-]\d{1,3}%$/;
-export const OPENAI_MODEL_PATTERN = /^[A-Za-z0-9._:-]+$/;
-export const LOCAL_MODEL_PATTERN = /^[A-Za-z0-9._\/-]+$/;
+export const OPENAI_MODEL_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
+export const LOCAL_MODEL_PATTERN = /^[A-Za-z0-9._\/-]{1,64}$/;
 /** "auto" or an ISO 639 code such as "es" (optionally with a region, "pt-BR"). */
 export const LANGUAGE_PATTERN = /^(auto|[a-z]{2,3}(-[A-Za-z]{2,4})?)$/;
 
