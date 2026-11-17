@@ -18,7 +18,7 @@ This is the Pi port of [hermes-telegram-voicenote](https://github.com/goldenSnip
 - Pi with [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) installed and connected (`/telegram-setup`, `/telegram-connect`).
 - [`ffmpeg`](https://ffmpeg.org) on `PATH` (macOS: `brew install ffmpeg`).
 - Internet access for Edge TTS (free, no account or API key).
-- For voice input, one of: `OPENAI_API_KEY`, or `python3` 3.9+ for local faster-whisper.
+- For voice input, one of: an OpenAI API key (`OPENAI_API_KEY`, or pasted in the [wizard](#wizard)), or `python3` 3.9+ for local faster-whisper.
 
 ## Install
 
@@ -26,19 +26,65 @@ This is the Pi port of [hermes-telegram-voicenote](https://github.com/goldenSnip
 pi install git:github.com/goldenSniperOS/pi-telegram-voicenote
 ```
 
-Pin a version with `@v0.2.0` at the end. To try it for one run only: `pi -e git:github.com/goldenSniperOS/pi-telegram-voicenote`.
+Pin a version with `@v0.3.0` at the end. To try it for one run only: `pi -e git:github.com/goldenSniperOS/pi-telegram-voicenote`.
 
 Install it wherever pi-telegram is installed. In Threaded Mode every Pi instance synthesizes its own replies, so every instance needs this extension loaded (a global `pi install` covers them all).
 
 Then send any message to your bot. You get the text, and a few seconds later the voice note.
 
-## Use
+## Wizard
 
-| Where | Command | Effect |
-|---|---|---|
-| Pi terminal | `/voicenote on` · `/voicenote off` · `/voicenote status` | Turn narration on or off (saved in the config file). |
-| Pi terminal | `/voicenote stt auto\|openai\|faster-whisper\|off` · `/voicenote setup-stt [confirm]` | Choose the voice input engine; install local faster-whisper. |
-| Telegram | `/voicenote on` · `off` · `status` · `stt …` · `setup-stt …` | Same, when the Telegram command can be registered (see [Limitations](#limitations)). |
+Type `/voicenote` in the Pi terminal (or `/voicenote menu`). A menu opens with the current status at the top and one entry per setting, each showing its current value:
+
+```text
+Voice replies: on
+Voice: es-AR-TomasNeural
+Rate: +0%
+Voice input: auto → faster-whisper (small)
+OpenAI API key: set (saved)
+OpenAI model: gpt-4o-mini-transcribe
+Audio language: es
+Local engine (faster-whisper): installed
+Test voice
+Done
+```
+
+Pick an entry to change it; the lists mark the current choice with `✓`, and **Other…** accepts any valid value. Every change is saved at once and applies to the next voice note. **Test voice** synthesizes a short sample with the current voice and rate and shows the file path. **Local engine** explains what it installs and asks before installing.
+
+**OpenAI API key** is where you paste your key (or replace or delete it). The input field shows what you paste, so check who can see your screen. Without a UI (`pi -p`), `/voicenote` prints the status instead. All [commands](#commands) also work as shortcuts.
+
+### Where the API key is stored
+
+The key from the wizard goes to its own file, `~/.pi/agent/telegram-voicenote.secrets.json` (or `$PI_CODING_AGENT_DIR/telegram-voicenote.secrets.json`), readable only by you (mode `0600`), separate from the settings file. `OPENAI_API_KEY` in Pi's environment always wins over the saved key. The key is never printed: the status shows only `OpenAI key: set (env)`, `set (saved)` or `not set`.
+
+### From Telegram
+
+Everything except the API key works from Telegram too:
+
+- **Buttons:** open the bot menu → **🎙 Voice notes**. Each button shows its current value; the lists mark the current choice with `✓`. **Test voice** queues a short reply so a real voice note arrives with the current voice. **Local engine** asks before installing. This uses pi-telegram's sections API and appears when this extension can import `@llblab/pi-telegram/sections`.
+- **Text menu:** send `/voicenote`. The reply is the status plus a numbered list; each line shows the current value and the exact command to change it. Send a subcommand without a value (for example `/voicenote voice`) to see the choices with the current one marked.
+
+The API key cannot be entered from Telegram, so it never stays in the chat history: `/voicenote key …` only explains where to enter it, stores nothing and never repeats what you sent. Paste it in the Pi terminal wizard or set `OPENAI_API_KEY`.
+
+## Commands
+
+Every setting is saved in the config file and applies at once. In Telegram they need the command to be registered (see [Limitations](#limitations)).
+
+| Command | Pi terminal | Telegram | Effect |
+|---|---|---|---|
+| `/voicenote` | Opens the [wizard](#wizard) (status without a UI) | Status + numbered menu | Everything in one place. |
+| `/voicenote menu` | Opens the wizard (text menu without a UI) | Status + numbered menu | Same as above. |
+| `/voicenote status` | ✓ | ✓ | Show the status line. |
+| `/voicenote on` · `/voicenote off` | ✓ | ✓ | Turn voice replies on or off. |
+| `/voicenote voice <name>` | ✓ | ✓ | Edge TTS voice, e.g. `es-AR-TomasNeural`. Without a name: list the presets. |
+| `/voicenote rate <±N%>` | ✓ | ✓ | Speaking rate, e.g. `+10%` (`10%` reads as `+10%`). Without a value: list the presets. |
+| `/voicenote stt auto\|openai\|faster-whisper\|off` | ✓ | ✓ | Voice input engine (`local` = `faster-whisper`). Without a value: list them. |
+| `/voicenote model <name>` | ✓ | ✓ | OpenAI transcription model: `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1`, … |
+| `/voicenote lang <code>` | ✓ | ✓ | Language of your voice notes: `auto`, `es`, `en`, `pt`, any ISO code (`language` also works). |
+| `/voicenote test` | Synthesizes a sample and shows the file | Queues a short reply that arrives as a voice note | Hear the current voice. |
+| `/voicenote setup-stt` · `setup-stt confirm` | ✓ | ✓ (progress in the chat) | Explain, then install local faster-whisper. |
+| `/voicenote key` | Opens the key dialog (paste / replace / delete) | Refused: explains where to enter it | OpenAI API key. Typed as an argument it is never saved. |
+| `/voicenote key delete` | Deletes the saved key | Refused | Remove the key saved by the wizard. |
 
 ## Configuration
 
@@ -83,14 +129,14 @@ Voice notes you send on Telegram are transcribed by this extension and reach Pi 
 
 | Engine | Needs | Notes |
 | --- | --- | --- |
-| `auto` (default) | — | OpenAI when `OPENAI_API_KEY` is set; otherwise local faster-whisper when it is installed. If OpenAI fails, falls back to local. |
-| `openai` | `OPENAI_API_KEY` in Pi's environment | Cloud. `OPENAI_BASE_URL` points it at a compatible API. |
+| `auto` (default) | — | OpenAI when an API key is available; otherwise local faster-whisper when it is installed. If OpenAI fails, falls back to local. |
+| `openai` | `OPENAI_API_KEY` in Pi's environment, or a key saved in the [wizard](#wizard) | Cloud. `OPENAI_BASE_URL` points it at a compatible API. |
 | `faster-whisper` (alias `local`) | `/voicenote setup-stt` once | Runs on your machine; the audio never leaves it. |
 | `off` | — | The extension does not transcribe; other pi-telegram handlers still can. |
 
-Local setup is explicit. `/voicenote setup-stt` explains what will be installed; `/voicenote setup-stt confirm` creates a Python environment in `~/.pi/agent/telegram-voicenote/stt-venv`, installs `faster-whisper` with pip and downloads the model (`small` by default, about 460 MB). It needs `python3` (3.9 or newer) and takes a few minutes the first time.
+Local setup is explicit (also from the wizard's **Local engine** entry or the Telegram buttons). `/voicenote setup-stt` explains what will be installed; `/voicenote setup-stt confirm` creates a Python environment in `~/.pi/agent/telegram-voicenote/stt-venv`, installs `faster-whisper` with pip and downloads the model (`small` by default, about 460 MB). It needs `python3` (3.9 or newer) and takes a few minutes the first time.
 
-Switch engines with `/voicenote stt auto|openai|faster-whisper|off`; `/voicenote status` shows which one is in use. When no engine is available, Pi receives a short note saying how to configure one instead of an unreadable audio file.
+Switch engines in the wizard or with `/voicenote stt auto|openai|faster-whisper|off`; `/voicenote status` shows which one is in use. When no engine is available, Pi receives a short note saying how to configure one instead of an unreadable audio file.
 
 pi-telegram runs audio `inboundHandlers` from `~/.pi/agent/telegram.json` before this extension. If you configured one earlier (for example Groq Whisper through [`groq-stt`](https://github.com/llblab/skills/tree/main/groq-stt)), it keeps winning; remove it to use the engines above.
 
@@ -108,6 +154,8 @@ This follows the composition the pi-telegram maintainer recommends for "text and
 - **Do not configure voice `outboundHandlers` in `telegram.json`.** pi-telegram runs those before providers, so they would receive this extension's marker instead of your reply.
 - The on/off switch is global, not per chat.
 - The Telegram `/voicenote` command is registered only when `@llblab/pi-telegram` can be imported from this package; otherwise use `/voicenote` in the Pi terminal.
+- The **🎙 Voice notes** buttons need pi-telegram's sections API (`@llblab/pi-telegram/sections`, pi-telegram 0.10.0 or newer) under the same condition; the `/voicenote` text menu works without it.
+- A Telegram command cannot send audio itself, so `/voicenote test` from Telegram queues a short prompt and the agent's reply brings the voice note (one model turn).
 - `pi -p` (print mode) shows the marker as raw text.
 
 ## Develop
