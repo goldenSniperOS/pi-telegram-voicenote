@@ -38,6 +38,8 @@ export interface VoicenoteController {
   localInstalled(): boolean;
   setupExplanation(): string;
   setupStt(say: (text: string) => unknown): Promise<string>;
+  /** Starts setup without waiting; progress and the result go to `say`. False when one is already running. */
+  startSetupStt(say: (text: string) => unknown): boolean;
   /** Synthesizes a short sample with the current voice and rate; returns the OGG path. */
   testVoice(): Promise<string>;
 }

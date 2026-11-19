@@ -6,6 +6,25 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-19
+
+### Fixed
+- Local speech-to-text setup is reported as installed only after every step succeeds (a
+  `voicenote-ready.json` marker in the venv). A venv left by a failed setup no longer shows as
+  ready. Installs from earlier versions are still detected.
+- `/voicenote setup-stt confirm` from Telegram, and the **Install now** button, run in the
+  background: the chat gets an answer at once, then progress and the result. Other commands
+  keep working meanwhile.
+- A progress message that Telegram fails to deliver no longer causes an unhandled promise
+  rejection in Pi.
+- `/voicenote on|off|status|test|menu` with extra words (e.g. `/voicenote on extra`) is
+  rejected with the usage instead of being applied.
+- The first transcription with a local model that is not downloaded yet gets 15 minutes
+  instead of the per-note timeout, so the download does not make it fail.
+
+### Changed
+- `setup-stt` installs a pinned `faster-whisper==1.2.1` instead of the latest release.
+
 ## [0.3.0] - 2026-11-16
 
 ### Added

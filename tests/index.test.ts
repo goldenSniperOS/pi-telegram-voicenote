@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createExtension, PROVIDER_ID, REGISTRY_KEY, TRANSCRIPTION_REGISTRY_KEY, type ExtensionDeps } from "../src/index.ts";
 import { buildMarker } from "../src/marker.ts";
+import { SETUP_STARTED, USAGE } from "../src/commands.ts";
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 type Handler = (event: any, ctx: any) => unknown;
 type Provider = (text: string, options?: { lang?: string; rate?: string }) => Promise<string | undefined>;
@@ -215,12 +218,57 @@ test("/voicenote setup-stt explains first and installs only with confirm", async
   assert.equal(env.notes.at(-1), `faster-whisper is ready (${join(venvDir, "bin", "python")}). Voice notes you send are now transcribed locally when no OPENAI_API_KEY is set.`);
 });
 
-test("/voicenote setup-stt reports a failure and Telegram gets progress", async () => {
-  const env = await setup({}, { stt: { env: {}, venvDir: "/venv", exists: () => false, runPython: async () => { throw new Error("pip exploded"); } } });
+test("Telegram /voicenote setup-stt confirm answers at once; progress and the result follow", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const venvDir = join(mkdtempSync(join(tmpdir(), "voicenote-venv-")), "stt-venv");
+  const env = await setup({}, { stt: { env: {}, venvDir, exists: () => false, runPython: async () => { await gate; throw new Error("pip exploded"); } } });
   const replies: string[] = [];
-  await env.telegramCommands[0].handler({ name: "voicenote", args: "setup-stt confirm", reply: (t: string) => replies.push(t), enqueuePrompt: async () => {} });
-  assert.deepEqual(replies, [
-    "Creating a Python environment in /venv…",
-    "Local speech-to-text setup failed: creating the Python environment failed: pip exploded",
-  ]);
+  const send = (args: string) => env.telegramCommands[0].handler({ name: "voicenote", args, reply: (t: string) => replies.push(t), enqueuePrompt: async () => {} });
+  await send("setup-stt confirm");
+  assert.deepEqual(replies, [SETUP_STARTED]);
+  await settle();
+  await send("setup-stt confirm");
+  assert.deepEqual(replies, [SETUP_STARTED, `Creating a Python environment in ${venvDir}…`, "Local speech-to-text setup is already running."]);
+  release();
+  await settle();
+  assert.deepEqual(replies.slice(3), ["Local speech-to-text setup failed: creating the Python environment failed: pip exploded"]);
+  assert.equal(SETUP_STARTED, "Installing local speech-to-text in the background. Progress and the result will arrive here.");
+});
+
+test("a Telegram reply that fails while reporting setup progress does not crash Pi", async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const venvDir = join(mkdtempSync(join(tmpdir(), "voicenote-venv-")), "stt-venv");
+    const env = await setup({}, { stt: { env: {}, venvDir, exists: () => false, runPython: async () => "ok" } });
+    const replies: string[] = [];
+    await env.telegramCommands[0].handler({
+      name: "voicenote", args: "setup-stt confirm", enqueuePrompt: async () => {},
+      reply: async (t: string) => { replies.push(t); if (t !== SETUP_STARTED) throw new Error("telegram down"); },
+    });
+    await settle();
+    assert.equal(replies.length, 5);
+    assert.match(replies.at(-1)!, /^faster-whisper is ready/);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  assert.deepEqual(unhandled, []);
+});
+
+test("/voicenote subcommands that take no value reject extra words and change nothing", async () => {
+  const env = await setup({ enabled: false });
+  const cmd = env.commands.get("voicenote");
+  for (const args of ["on extra", "off now", "status please", "test 2", "menu x"]) {
+    await cmd.handler(args, env.ctx);
+    assert.equal(env.notes.at(-1), `/voicenote ${args.split(" ")[0]} takes no arguments. ${USAGE}`);
+  }
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).enabled, false);
+  const replies: string[] = [];
+  await env.telegramCommands[0].handler({ name: "voicenote", args: "on please", reply: (t: string) => replies.push(t), enqueuePrompt: async () => {} });
+  assert.deepEqual(replies, [`/voicenote on takes no arguments. ${USAGE}`]);
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).enabled, false);
+  await cmd.handler("on", env.ctx);
+  assert.equal(JSON.parse(readFileSync(env.configPath, "utf8")).enabled, true);
 });

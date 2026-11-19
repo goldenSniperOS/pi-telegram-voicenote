@@ -1,17 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createTranscriber,
   describeStt,
+  FASTER_WHISPER_VERSION,
+  FIRST_MODEL_TIMEOUT_MS,
+  hasLocalEngine,
   LOCAL_SCRIPT,
   pickEngines,
   PREFETCH_SCRIPT,
+  READY_FILE,
   setupLocalStt,
   transcribeLocal,
   transcribeOpenAI,
+  venvPython,
   type SttSettings,
 } from "../src/stt.ts";
 
@@ -112,7 +117,7 @@ test("transcriber: auto without a key uses the local venv python", async () => {
   const runs: string[] = [];
   const transcribe = createTranscriber(() => settings({ sttLanguage: "es" }), {
     env: {},
-    exists: (p) => p === join("/venv", "bin", "python"),
+    exists: (p) => p === join("/venv", "bin", "python") || p === join("/venv", READY_FILE),
     venvDir: "/venv",
     runPython: async (bin, args) => { runs.push(`${bin} ${args.slice(2).join(" ")}`); return '{"text":"local"}'; },
   });
@@ -179,24 +184,27 @@ test("transcriber: an explicit sttPython is used instead of the venv", async () 
 test("setupLocalStt creates the venv, installs faster-whisper and prefetches the model", async () => {
   const runs: string[] = [];
   const progress: string[] = [];
+  const venvDir = join(mkdtempSync(join(tmpdir(), "voicenote-setup-")), "stt-venv");
   const python = await setupLocalStt({
-    venvDir: "/venv", model: "small", basePython: "python3",
+    venvDir, model: "small", basePython: "python3",
     run: async (bin, args) => { runs.push([bin, ...args.filter((a) => a !== PREFETCH_SCRIPT)].join(" ")); return "ok\n"; },
     progress: (m) => progress.push(m),
   });
-  const py = join("/venv", "bin", "python");
+  const py = join(venvDir, "bin", "python");
   assert.equal(python, py);
   assert.deepEqual(runs, [
-    "python3 -m venv /venv",
-    `${py} -m pip install --upgrade faster-whisper`,
+    `python3 -m venv ${venvDir}`,
+    `${py} -m pip install faster-whisper==${FASTER_WHISPER_VERSION}`,
     `${py} -c small`,
   ]);
   assert.deepEqual(progress, [
-    "Creating a Python environment in /venv…",
-    "Installing faster-whisper (pip)…",
+    `Creating a Python environment in ${venvDir}…`,
+    `Installing faster-whisper ${FASTER_WHISPER_VERSION} (pip)…`,
     "Downloading the faster-whisper model \"small\" (first time only)…",
   ]);
   assert.match(PREFETCH_SCRIPT, /WhisperModel\(sys\.argv\[1\]/);
+  assert.equal(FASTER_WHISPER_VERSION, "1.2.1");
+  assert.deepEqual(JSON.parse(readFileSync(join(venvDir, READY_FILE), "utf8")), { models: ["small"] });
 });
 
 test("transcriber: a key saved from the wizard is used when OPENAI_API_KEY is unset; the env key wins", async () => {
@@ -220,4 +228,60 @@ test("setupLocalStt stops at the first failing step", async () => {
     /creating the Python environment failed: No module named venv/,
   );
   assert.equal(runs.length, 1);
+});
+
+/** A venv whose python exists, as `python -m venv` leaves it. */
+function fakeVenv(): string {
+  const venvDir = join(mkdtempSync(join(tmpdir(), "voicenote-venv-")), "stt-venv");
+  mkdirSync(join(venvDir, "bin"), { recursive: true });
+  writeFileSync(venvPython(venvDir), "");
+  return venvDir;
+}
+
+test("a venv left by a failed setup is not reported as installed, even after an earlier success", async () => {
+  const venvDir = fakeVenv();
+  writeFileSync(join(venvDir, READY_FILE), JSON.stringify({ models: ["small"] }));
+  await assert.rejects(
+    setupLocalStt({ venvDir, model: "small", run: async (_bin, args) => { if (args[1] === "pip") throw new Error("no network"); return "ok"; } }),
+    /installing faster-whisper failed: no network/,
+  );
+  const deps = { env: {}, venvDir };
+  assert.equal(hasLocalEngine(settings(), deps), false);
+  assert.equal(describeStt(settings(), deps), "auto → not configured");
+  const notice = await createTranscriber(() => settings(), deps)(voice("/a/v.ogg"));
+  assert.match(notice!, /^\[Voice note not transcribed: no speech-to-text engine is configured\./);
+});
+
+test("an install from an earlier version (faster_whisper in site-packages, no marker) still counts as installed", () => {
+  const venvDir = fakeVenv();
+  const packages = process.platform === "win32"
+    ? join(venvDir, "Lib", "site-packages", "faster_whisper")
+    : join(venvDir, "lib", "python3.12", "site-packages", "faster_whisper");
+  assert.equal(hasLocalEngine(settings(), { env: {}, venvDir }), false);
+  mkdirSync(packages, { recursive: true });
+  assert.equal(hasLocalEngine(settings(), { env: {}, venvDir }), true);
+  assert.equal(describeStt(settings(), { env: {}, venvDir }), "auto → faster-whisper (small)");
+});
+
+test("transcriber: a model not downloaded yet gets the first-download timeout, then the normal one", async () => {
+  const venvDir = fakeVenv();
+  writeFileSync(join(venvDir, READY_FILE), JSON.stringify({ models: ["small"] }));
+  const timeouts: number[] = [];
+  const deps = { env: {}, venvDir, runPython: async (_bin: string, _args: string[], timeoutMs: number) => { timeouts.push(timeoutMs); return '{"text":"hola"}'; } };
+  const medium = createTranscriber(() => settings({ sttEngine: "faster-whisper", sttLocalModel: "medium", sttTimeoutMs: 60_000 }), deps);
+  const small = createTranscriber(() => settings({ sttEngine: "faster-whisper", sttLocalModel: "small", sttTimeoutMs: 60_000 }), deps);
+  assert.equal(await medium(voice("/a/v.ogg")), "hola");
+  assert.equal(await medium(voice("/a/v.ogg")), "hola");
+  assert.equal(await small(voice("/a/v.ogg")), "hola");
+  assert.deepEqual(timeouts, [FIRST_MODEL_TIMEOUT_MS, 60_000, 60_000]);
+  assert.equal(FIRST_MODEL_TIMEOUT_MS, 15 * 60 * 1000);
+  assert.deepEqual(JSON.parse(readFileSync(join(venvDir, READY_FILE), "utf8")), { models: ["small", "medium"] });
+});
+
+test("transcriber: a failed first transcription does not mark the model as downloaded", async () => {
+  const venvDir = fakeVenv();
+  writeFileSync(join(venvDir, READY_FILE), JSON.stringify({ models: ["small"] }));
+  const deps = { env: {}, venvDir, runPython: async () => { throw new Error("download interrupted"); } };
+  await createTranscriber(() => settings({ sttEngine: "faster-whisper", sttLocalModel: "medium" }), deps)(voice("/a/v.ogg"));
+  assert.deepEqual(JSON.parse(readFileSync(join(venvDir, READY_FILE), "utf8")), { models: ["small"] });
 });

@@ -9,7 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { SttEngine, VoicenoteConfig } from "./config.ts";
@@ -133,13 +133,48 @@ export async function transcribeLocal(
   return text.trim();
 }
 
+/** Written by `setupLocalStt` once every step succeeded: {"models": [prefetched models]}. */
+export const READY_FILE = "voicenote-ready.json";
+
+/** Per-note timeout for the first use of a model the venv has not downloaded yet. */
+export const FIRST_MODEL_TIMEOUT_MS = 15 * 60 * 1000;
+
+function readReadyModels(venvDir: string): string[] {
+  try {
+    const models = (JSON.parse(readFileSync(join(venvDir, READY_FILE), "utf8")) as { models?: unknown }).models;
+    return Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeReadyModels(venvDir: string, models: string[]): void {
+  mkdirSync(venvDir, { recursive: true });
+  writeFileSync(join(venvDir, READY_FILE), `${JSON.stringify({ models })}\n`);
+}
+
+/** Installs made before the ready marker existed: faster_whisper in the venv's site-packages. */
+function hasLegacyInstall(venvDir: string, exists: (path: string) => boolean): boolean {
+  if (exists(join(venvDir, "Lib", "site-packages", "faster_whisper"))) return true;
+  try {
+    return readdirSync(join(venvDir, "lib"))
+      .some((entry) => entry.startsWith("python") && exists(join(venvDir, "lib", entry, "site-packages", "faster_whisper")));
+  } catch {
+    return false;
+  }
+}
+
 function resolve(settings: SttSettings, deps: SttDeps) {
   const env = deps.env ?? process.env;
   const exists = deps.exists ?? existsSync;
   const apiKey = resolveApiKey(env, deps.secretsPath)?.key ?? "";
-  const python = settings.sttPython ?? venvPython(deps.venvDir ?? "");
-  const hasLocal = Boolean(settings.sttPython || deps.venvDir) && exists(python);
-  return { env, apiKey, python, hasLocal, engines: pickEngines(settings.sttEngine, { hasKey: Boolean(apiKey), hasLocal }) };
+  const venvDir = settings.sttPython ? undefined : deps.venvDir || undefined;
+  const python = settings.sttPython ?? venvPython(venvDir ?? "");
+  // The plugin venv counts only after a complete setup, so a half-finished install is not "ready".
+  const hasLocal = settings.sttPython
+    ? exists(python)
+    : Boolean(venvDir) && exists(python) && (exists(join(venvDir!, READY_FILE)) || hasLegacyInstall(venvDir!, exists));
+  return { env, apiKey, python, venvDir, hasLocal, engines: pickEngines(settings.sttEngine, { hasKey: Boolean(apiKey), hasLocal }) };
 }
 
 /** Whether a Python with faster-whisper is in place (the plugin venv or `sttPython`). */
@@ -157,12 +192,35 @@ export function describeStt(settings: SttSettings, deps: SttDeps = {}): string {
   return `${settings.sttEngine} → ${detail}`;
 }
 
+/**
+ * A model the plugin venv has not downloaded yet is fetched by the first
+ * transcription, so that call gets FIRST_MODEL_TIMEOUT_MS instead of the
+ * per-note timeout; a success records the model as downloaded.
+ */
+async function transcribeLocalOnce(
+  path: string,
+  venvDir: string | undefined,
+  options: Parameters<typeof transcribeLocal>[1],
+): Promise<string> {
+  const known = venvDir ? readReadyModels(venvDir) : undefined;
+  const firstUse = known !== undefined && !known.includes(options.model);
+  const text = await transcribeLocal(path, firstUse ? { ...options, timeoutMs: Math.max(options.timeoutMs, FIRST_MODEL_TIMEOUT_MS) } : options);
+  if (firstUse) {
+    try {
+      writeReadyModels(venvDir!, [...known, options.model]);
+    } catch {
+      // Only costs a longer timeout next time.
+    }
+  }
+  return text;
+}
+
 /** The pi-telegram transcription provider. Returns undefined for non-audio or when off. */
 export function createTranscriber(getSettings: () => SttSettings, deps: SttDeps = {}) {
   return async (file: TranscriptionFile): Promise<string | undefined> => {
     const settings = getSettings();
     if (settings.sttEngine === "off" || !isAudio(file)) return undefined;
-    const { env, apiKey, python, engines } = resolve(settings, deps);
+    const { env, apiKey, python, venvDir, engines } = resolve(settings, deps);
     if (engines.length === 0) {
       return `[Voice note not transcribed: no speech-to-text engine is configured. Set OPENAI_API_KEY for cloud transcription, or run /voicenote setup-stt to install local faster-whisper. Audio file: ${file.path}]`;
     }
@@ -175,7 +233,7 @@ export function createTranscriber(getSettings: () => SttSettings, deps: SttDeps 
             apiKey, baseUrl: env.OPENAI_BASE_URL?.trim() || DEFAULT_OPENAI_BASE_URL, model: settings.sttOpenaiModel,
             language: lang, timeoutMs: settings.sttTimeoutMs, fetch: deps.fetch,
           })
-          : await transcribeLocal(file.path, {
+          : await transcribeLocalOnce(file.path, venvDir, {
             python, model: settings.sttLocalModel, language: lang, timeoutMs: settings.sttTimeoutMs, run: deps.runPython,
           });
         if (text) return text;
@@ -204,6 +262,9 @@ export const modelSize = (model: string): string => MODEL_SIZES[model] ?? "downl
 
 const SETUP_TIMEOUT_MS = 30 * 60 * 1000;
 
+/** The faster-whisper release setup installs; bump it deliberately after testing a new one. */
+export const FASTER_WHISPER_VERSION = "1.2.1";
+
 /**
  * Creates a plugin-owned venv, installs faster-whisper and prefetches `model`.
  * Only ever runs from an explicit `/voicenote setup-stt confirm`.
@@ -220,10 +281,13 @@ export async function setupLocalStt(options: {
   const steps: Array<[string, string, string, string[]]> = [
     [`Creating a Python environment in ${options.venvDir}…`, "creating the Python environment",
       options.basePython ?? (process.platform === "win32" ? "python" : "python3"), ["-m", "venv", options.venvDir]],
-    ["Installing faster-whisper (pip)…", "installing faster-whisper", python, ["-m", "pip", "install", "--upgrade", "faster-whisper"]],
+    [`Installing faster-whisper ${FASTER_WHISPER_VERSION} (pip)…`, "installing faster-whisper",
+      python, ["-m", "pip", "install", `faster-whisper==${FASTER_WHISPER_VERSION}`]],
     [`Downloading the faster-whisper model "${options.model}" (first time only)…`, "downloading the model",
       python, ["-c", PREFETCH_SCRIPT, options.model]],
   ];
+  // A rerun starts as "not installed" until every step succeeds again.
+  rmSync(join(options.venvDir, READY_FILE), { force: true });
   for (const [message, label, bin, args] of steps) {
     options.progress?.(message);
     try {
@@ -231,6 +295,11 @@ export async function setupLocalStt(options: {
     } catch (error) {
       throw new Error(`${label} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+  try {
+    writeReadyModels(options.venvDir, [options.model]);
+  } catch (error) {
+    throw new Error(`recording the installation failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return python;
 }
