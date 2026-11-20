@@ -26,6 +26,20 @@ export interface CommandIO {
   sectionAvailable?: boolean;
 }
 
+export const SETUP_STARTED = "Installing local speech-to-text in the background. Progress and the result will arrive here.";
+export const SETUP_ALREADY_RUNNING = "Local speech-to-text setup is already running.";
+
+/** Sends a message without letting a failed delivery (sync throw or rejection) escape. */
+export function sayQuietly(say: (text: string) => unknown, text: string): void {
+  try {
+    void Promise.resolve(say(text)).catch(() => {});
+  } catch {
+    // A progress line that cannot be delivered is not worth failing the setup.
+  }
+}
+
+const NO_VALUE_COMMANDS = new Set(["on", "off", "status", "test", "menu"]);
+
 export const USAGE =
   "Usage: /voicenote [menu|on|off|status|test] · /voicenote voice|rate|stt|model|lang <value> · /voicenote setup-stt";
 
@@ -148,6 +162,8 @@ export async function runCommand(args: string, c: VoicenoteController, io: Comma
   }
   if (sub === "setup-stt") {
     if (value.toLowerCase() !== "confirm") return `${c.setupExplanation()} Send /voicenote setup-stt confirm to proceed.`;
+    // Telegram runs one command at a time; a minutes-long install must not hold the handler.
+    if (io.surface === "telegram") return c.startSetupStt(io.say) ? SETUP_STARTED : SETUP_ALREADY_RUNNING;
     return c.setupStt(io.say);
   }
   if (sub === "stt") {
@@ -168,6 +184,7 @@ export async function runCommand(args: string, c: VoicenoteController, io: Comma
     c.update({ [setting.key]: parsed } as Partial<VoicenoteConfig>);
     return c.status();
   }
+  if (NO_VALUE_COMMANDS.has(sub) && value) return `/voicenote ${sub} takes no arguments. ${USAGE}`;
   if (sub === "test") return runTest(c, io);
   if (sub === "on" || sub === "off") {
     c.update({ enabled: sub === "on" });

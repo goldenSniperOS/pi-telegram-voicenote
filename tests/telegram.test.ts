@@ -289,7 +289,10 @@ test("section: invalid payloads change nothing; the key button only explains; te
 
 test("section: install asks first and runs setup only from the confirm button", async () => {
   const runs: string[] = [];
-  const env = await setup({}, { stt: { env: {}, venvDir: "/venv", exists: () => false, runPython: async (bin) => { runs.push(bin); return "ok"; } } });
+  const venvDir = join(mkdtempSync(join(tmpdir(), "voicenote-venv-")), "stt-venv");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const env = await setup({}, { stt: { env: {}, venvDir, exists: () => false, runPython: async (bin) => { await gate; runs.push(bin); return "ok"; } } });
   const section = env.sections[0];
   const ask = sectionCtx("install");
   await section.handleCallback(ask.ctx);
@@ -297,7 +300,10 @@ test("section: install asks first and runs setup only from the confirm button", 
   assert.match(ask.edits[0].text, /faster-whisper/);
   assert.ok(buttons(ask.edits[0]).some((b) => b.callback_data === "s:installgo:"));
   const go = sectionCtx("installgo");
-  await section.handleCallback(go.ctx);
+  assert.equal(await section.handleCallback(go.ctx), "handled");
+  assert.equal(runs.length, 0);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(runs.length, 3);
   assert.ok(go.opened.some((v) => /faster-whisper is ready/.test(v.text)));
 });

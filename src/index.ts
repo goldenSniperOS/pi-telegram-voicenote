@@ -12,7 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { runCommand } from "./commands.ts";
+import { runCommand, SETUP_ALREADY_RUNNING, sayQuietly } from "./commands.ts";
 import {
   configPath as defaultConfigPath,
   loadConfig,
@@ -120,20 +120,35 @@ export function createExtension(deps: ExtensionDeps = {}) {
       return `This installs local speech-to-text: a Python environment in ${sttDeps.venvDir}, the faster-whisper package, and the "${model}" model (${modelSize(model)}). Nothing leaves this machine when transcribing.`;
     };
 
-    const setupStt = async (say: (text: string) => unknown): Promise<string> => {
-      config = loadConfig(path).config;
-      const venvDir = sttDeps.venvDir!;
-      const model = config.sttLocalModel;
-      if (setupRunning) return "Local speech-to-text setup is already running.";
-      setupRunning = true;
+    /** Runs the install; the caller has already set `setupRunning`. Never rejects. */
+    const runSetup = async (say: (text: string) => unknown): Promise<string> => {
       try {
-        const python = await setupLocalStt({ venvDir, model, run: sttDeps.runPython, progress: (m) => { void say(m); } });
+        config = loadConfig(path).config;
+        const venvDir = sttDeps.venvDir!;
+        const model = config.sttLocalModel;
+        const python = await setupLocalStt({ venvDir, model, run: sttDeps.runPython, progress: (m) => sayQuietly(say, m) });
         return `faster-whisper is ready (${python}). Voice notes you send are now transcribed locally when no OPENAI_API_KEY is set.`;
       } catch (error) {
         return `Local speech-to-text setup failed: ${error instanceof Error ? error.message : String(error)}`;
       } finally {
         setupRunning = false;
       }
+    };
+
+    const setupStt = async (say: (text: string) => unknown): Promise<string> => {
+      if (setupRunning) return SETUP_ALREADY_RUNNING;
+      setupRunning = true;
+      return runSetup(say);
+    };
+
+    const startSetupStt = (say: (text: string) => unknown): boolean => {
+      if (setupRunning) return false;
+      setupRunning = true;
+      // Deferred so the "started" answer reaches the chat before the first progress line.
+      setImmediate(() => {
+        void runSetup(say).then((result) => sayQuietly(say, result));
+      });
+      return true;
     };
 
     const keyState = () => describeApiKey(sttDeps.env ?? process.env, keyPath);
@@ -162,6 +177,7 @@ export function createExtension(deps: ExtensionDeps = {}) {
       localInstalled: () => hasLocalEngine(config, sttDeps),
       setupExplanation,
       setupStt,
+      startSetupStt,
       testVoice: () => {
         config = loadConfig(path).config;
         return synthesize(sampleText(config.voice, config.rate), config);

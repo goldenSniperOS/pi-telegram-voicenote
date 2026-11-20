@@ -37,6 +37,7 @@ Port of goldenSniperOS/hermes-telegram-voicenote. Repo: goldenSniperOS/pi-telegr
 - T12 [S12,S13] Pi wizard + secrets file + key precedence in STT — worker — commit — DONE (c88b947)
 - T13 [S14] Telegram wizard (menu without key entry) — worker — commit — DONE (344db41)
 - T14 [S12-S14] Docs (README command list, CHANGELOG), v0.3.0 release per AGENTS.md — inline — commit + release — DONE
+- T15 [S10-S14] v0.3.1 review follow-ups (safe progress, ready marker, extra args, background Telegram setup, pinned faster-whisper, first-model timeout) — inline — commit + release
 
 ## Log
 
@@ -57,3 +58,4 @@ Port of goldenSniperOS/hermes-telegram-voicenote. Repo: goldenSniperOS/pi-telegr
 - L15 (user, S12 amendment): "En el Wizard estas poniendo también los valores seleccionados no?" → every menu entry shows its current value inline; sub-lists mark the current option; Telegram text menu too. Sent to the T12/T13 worker.
 - L16 (T12/T13 evidence): worker built Pi wizard (src/wizard.ts, options.ts, secrets.ts) and Telegram (src/commands.ts shared runCommand, src/telegram.ts section via registerTelegramSection — stable pi-telegram API; command API only has reply(text)+enqueuePrompt). `npm run check` 96/96. Unverified live: Pi TUI dialogs, Telegram buttons/callbacks, enqueuePrompt test turn. Assess with escalate item 2: reviewDue false (under_budget), independentVerifier true → gentle-ai-verify launched. Slice boundary: c88b947 | 344db41 | T14 docs/version.
 - L17 (verify, Risk item 2): PASS S12-S14; key file 0600, env wins, key never echoed, Telegram refuses keys, invalid values leave config byte-identical. Low finding (no length cap on voice/model) fixed with a 64-char cap (RED→GREEN, 97 tests). Remaining info: hand-edited sttLanguage not pattern-checked; custom voices >~45 chars get no Telegram button. Unverified live: Pi TUI dialogs, Telegram buttons, enqueuePrompt test turn.
+- L18 (T15): user asked to finish the v0.2.0 review follow-ups before any update or install, then open the PR, publish the release and report the install command. npm run check: 103 pass.

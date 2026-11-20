@@ -92,7 +92,6 @@ const rows = (buttons: Array<InlineButton | undefined>) => ({
 });
 
 export function createVoicenoteSection(c: VoicenoteController): TelegramSectionRegistration {
-  let installing = false;
 
   const mainView = (ctx: SectionContext): TelegramSectionView => {
     const e = menuEntries(c);
@@ -164,18 +163,9 @@ export function createVoicenoteSection(c: VoicenoteController): TelegramSectionR
         });
         return "handled";
       case "installgo": {
-        if (installing) {
-          await ctx.answerCallback("Already installing…");
-          return "handled";
-        }
-        installing = true;
-        try {
-          await ctx.answerCallback("Installing local speech-to-text…");
-          const say = (text: string) => ctx.open({ text, parseMode: "plain" });
-          await say(await c.setupStt(say));
-        } finally {
-          installing = false;
-        }
+        // Runs in the background: a minutes-long install must not hold pi-telegram's callback handler.
+        const say = (text: string) => ctx.open({ text, parseMode: "plain" });
+        await ctx.answerCallback(c.startSetupStt(say) ? "Installing local speech-to-text…" : "Already installing…");
         return "handled";
       }
       case "test": {

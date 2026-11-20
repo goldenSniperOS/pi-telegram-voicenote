@@ -26,7 +26,7 @@ This is the Pi port of [hermes-telegram-voicenote](https://github.com/goldenSnip
 pi install git:github.com/goldenSniperOS/pi-telegram-voicenote
 ```
 
-Pin a version with `@v0.3.0` at the end. To try it for one run only: `pi -e git:github.com/goldenSniperOS/pi-telegram-voicenote`.
+Pin a version with `@v0.3.1` at the end. To try it for one run only: `pi -e git:github.com/goldenSniperOS/pi-telegram-voicenote`.
 
 Install it wherever pi-telegram is installed. In Threaded Mode every Pi instance synthesizes its own replies, so every instance needs this extension loaded (a global `pi install` covers them all).
 
@@ -82,7 +82,7 @@ Every setting is saved in the config file and applies at once. In Telegram they 
 | `/voicenote model <name>` | ✓ | ✓ | OpenAI transcription model: `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1`, … |
 | `/voicenote lang <code>` | ✓ | ✓ | Language of your voice notes: `auto`, `es`, `en`, `pt`, any ISO code (`language` also works). |
 | `/voicenote test` | Synthesizes a sample and shows the file | Queues a short reply that arrives as a voice note | Hear the current voice. |
-| `/voicenote setup-stt` · `setup-stt confirm` | ✓ | ✓ (progress in the chat) | Explain, then install local faster-whisper. |
+| `/voicenote setup-stt` · `setup-stt confirm` | ✓ | ✓ (runs in the background; progress and result in the chat) | Explain, then install local faster-whisper. |
 | `/voicenote key` | Opens the key dialog (paste / replace / delete) | Refused: explains where to enter it | OpenAI API key. Typed as an argument it is never saved. |
 | `/voicenote key delete` | Deletes the saved key | Refused | Remove the key saved by the wizard. |
 
@@ -120,7 +120,7 @@ Optional file: `~/.pi/agent/telegram-voicenote.json` (or `$PI_CODING_AGENT_DIR/t
 | `sttOpenaiModel` | `"gpt-4o-mini-transcribe"` | OpenAI transcription model, e.g. `whisper-1`, `gpt-4o-transcribe`. |
 | `sttLocalModel` | `"small"` | faster-whisper model: `tiny`, `base`, `small`, `medium`, `large-v3`, `turbo`, or a Hugging Face repo id. A new model downloads on first use. |
 | `sttLanguage` | `"auto"` | Language code of your voice notes, e.g. `"es"`; `auto` detects it. |
-| `sttTimeoutMs` | `120000` | Time limit per engine for one voice note (10000–1800000). |
+| `sttTimeoutMs` | `120000` | Time limit per engine for one voice note (10000–1800000). The first note with a local model that is not downloaded yet gets 15 minutes. |
 | `sttPython` | plugin venv | A Python that already has `faster-whisper`, instead of the one `setup-stt` creates. |
 
 ## Sending voice notes to Pi
@@ -134,7 +134,7 @@ Voice notes you send on Telegram are transcribed by this extension and reach Pi 
 | `faster-whisper` (alias `local`) | `/voicenote setup-stt` once | Runs on your machine; the audio never leaves it. |
 | `off` | — | The extension does not transcribe; other pi-telegram handlers still can. |
 
-Local setup is explicit (also from the wizard's **Local engine** entry or the Telegram buttons). `/voicenote setup-stt` explains what will be installed; `/voicenote setup-stt confirm` creates a Python environment in `~/.pi/agent/telegram-voicenote/stt-venv`, installs `faster-whisper` with pip and downloads the model (`small` by default, about 460 MB). It needs `python3` (3.9 or newer) and takes a few minutes the first time.
+Local setup is explicit (also from the wizard's **Local engine** entry or the Telegram buttons). `/voicenote setup-stt` explains what will be installed; `/voicenote setup-stt confirm` creates a Python environment in `~/.pi/agent/telegram-voicenote/stt-venv`, installs `faster-whisper` 1.2.1 with pip and downloads the model (`small` by default, about 460 MB). It needs `python3` (3.9 or newer) and takes a few minutes the first time. The engine counts as installed only after every step succeeds; if setup fails, run it again.
 
 Switch engines in the wizard or with `/voicenote stt auto|openai|faster-whisper|off`; `/voicenote status` shows which one is in use. When no engine is available, Pi receives a short note saying how to configure one instead of an unreadable audio file.
 
